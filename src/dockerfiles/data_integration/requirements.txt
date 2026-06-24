@@ -1,0 +1,8 @@
+fastapi
+numpy
+pandas
+requests
+scikit-learn
+uvicorn
+sqlalchemy
+psycopg2-binary

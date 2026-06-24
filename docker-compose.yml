@@ -1,0 +1,460 @@
+#
+#
+#
+#
+
+x-airflow-common:
+  &airflow-common
+  build:
+    context: ./src/dockerfiles/airflow
+    dockerfile: ./Dockerfile
+  restart: always
+  env_file:
+    - .env
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    
+    
+    AIRFLOW__CORE__FERNET_KEY: ''
+ 
+          
+    # DATABASE
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_AIRF_USER}:${POSTGRES_AIRF_PASSWORD}@postgres-airflow/${POSTGRES_AIRF_DB}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_AIRF_USER}:${POSTGRES_AIRF_PASSWORD}@postgres-airflow/${POSTGRES_AIRF_DB}
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+
+    # EXECUTION API
+    AIRFLOW__API__ENABLE_EXECUTION_API: "true"
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__API_AUTH__JWT_ALGORITHM: "HS256"
+    AIRFLOW__API_AUTH__JWT_ISSUER: ${AIRFLOW__API_AUTH__JWT_ISSUER:-airflow}
+
+    # AUTH JWT
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api_fastapi.auth.backend.jwt_auth
+
+    # UI / BASE URL
+    AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+
+    # MISC
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+        
+    # CHECK
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./plugins:/opt/airflow/plugins
+    - ./logs:/opt/airflow/logs
+    - ./src/data:/data
+    - ./config:/opt/airflow/config
+    - /var/run/docker.sock:/var/run/docker.sock
+  user: "${AIRFLOW_UID:-50000}:0"
+  group_add:
+    - "${DOCKER_GID}"
+  depends_on:
+    &airflow-common-depends-on
+    postgres-airflow:
+      condition: service_healthy
+    redis:
+      condition: service_started
+
+
+services:
+
+# =====================================================
+#
+# AIRFLOW APPLICATION
+#
+# =====================================================
+
+  # Container : postgresql pour airflow
+  postgres-airflow:
+    image: postgres:16
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_AIRF_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_AIRF_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_AIRF_DB}
+    volumes:
+      - airflow-postgres-db:/var/lib/postgresql/data
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AIRF_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: always
+ 
+  # Container : redis / broker entre Airflow Scheduler & Celery Worker
+  redis:
+    image: redis:7.2-bookworm
+    expose:
+      - 6379
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: airflow-apiserver
+    command: api-server
+    ports:
+      - "8080:8080"
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    networks:
+      - weather
+    healthcheck:
+      # yamllint disable rule:line-length
+      test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      # Requis pour gérer correctement l’arrêt progressif des workers Celery
+      # Voir : https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-apiserver:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    networks:
+      - weather
+    restart: "no"
+    entrypoint: /bin/bash
+    # yamllint disable rule:line-length
+    command:
+      - -c
+      - |
+        if [[ -z "${AIRFLOW_UID}" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
+          echo "If you are on Linux, you SHOULD follow the instructions below to set "
+          echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
+          echo "For other operating systems you can get rid of the warning with manually created .env file:"
+          echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#setting-the-right-airflow-user"
+          echo
+          export AIRFLOW_UID=$$(id -u)
+        fi
+        one_meg=1048576
+        mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
+        cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
+        disk_available=$$(df / | tail -1 | awk '{print $$4}')
+        warning_resources="false"
+        if (( mem_available < 4000 )) ; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
+          echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
+          echo
+          warning_resources="true"
+        fi
+        if (( cpus_available < 2 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
+          echo "At least 2 CPUs recommended. You have $${cpus_available}"
+          echo
+          warning_resources="true"
+        fi
+        if (( disk_available < one_meg * 10 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
+          echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
+          echo
+          warning_resources="true"
+        fi
+        if [[ $${warning_resources} == "true" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
+          echo "Please follow the instructions to increase amount of resources available:"
+          echo "   https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#before-you-begin"
+          echo
+        fi
+        echo
+        echo "Creating missing opt dirs if missing:"
+        echo
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Airflow version:"
+        /entrypoint airflow version
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Running airflow config list to create default config file if missing."
+        echo
+        /entrypoint airflow config list >/dev/null
+        echo
+        echo "Importing Airflow variables from JSON..."  
+        if [ -f /opt/airflow/config/variables.json ]; then
+            /entrypoint airflow variables import /opt/airflow/config/variables.json
+            echo "Variables imported."
+        else
+            echo -e "\033[1;33mWARNING!!!: variables.json not found!\e[0m"
+        fi
+        /entrypoint airflow connections delete weather_postgres || true
+        /entrypoint airflow connections add weather_postgres \
+            --conn-type postgres \
+            --conn-host weather-postgres \
+            --conn-login "${POSTGRES_WTH_USER}" \
+            --conn-password "${POSTGRES_WTH_PASSWORD}" \
+            --conn-schema "${POSTGRES_WTH_DB}" \
+            --conn-port 5432
+        echo "ConnexionString created."
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
+        echo
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/
+        echo
+        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
+        echo
+        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+
+    # yamllint enable rule:line-length
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    user: "0:0"
+
+  airflow-cli:
+    <<: *airflow-common
+    profiles:
+      - debug
+    networks:
+      - weather
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    # Workaround for entrypoint issue. See: https://github.com/apache/airflow/issues/16252
+    command:
+      - bash
+      - -c
+      - airflow
+    depends_on:
+      <<: *airflow-common-depends-on
+
+
+
+# =====================================================
+#
+# WEATHER APPLICATION
+#
+# =====================================================
+
+
+  # Container : postgresql pour previsions de pluie
+  postgres-weather:
+    image: postgres:16
+    container_name: weather-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_WTH_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_WTH_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_WTH_DB}
+    volumes:
+      - weather-postgres-db:/var/lib/postgresql/data
+      - ./src/sql/weather:/docker-entrypoint-initdb.d
+    networks:
+      - weather
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_WTH_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: always
+
+ 
+
+  # Container : api
+  api-weather:
+    build:
+      context: ./src/dockerfiles/api_weather
+      dockerfile: ./Dockerfile
+    container_name: api-weather
+    env_file:
+      - .env
+    environment:
+      POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
+      POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
+      POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
+    depends_on:
+      postgres-weather:
+        condition: service_healthy
+    restart: always
+    networks:
+      - weather
+    ports:
+      - "8057:8057"
+    volumes:
+      - ./src/data:/data
+      - ./logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8057/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+      
+  # Container : data-integration
+  data-integration:
+    image: data-integration:latest
+    build:
+      context: .
+      dockerfile: ./src/dockerfiles/data_integration/Dockerfile
+    env_file:
+      - .env
+    environment:
+      POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
+      POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
+      POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
+    depends_on:
+      airflow-apiserver:
+        condition: service_healthy
+      postgres-weather:
+        condition: service_healthy
+    networks:
+      - weather
+    volumes:
+      - ./src/data:/data
+      - ./logs:/logs
+
+   
+  # Containers data-validation
+  # Containers data-preparation
+  # Containers model-trainig
+  # Containers model-evaluation
+  # Containers model-validation 
+  # ...
+  # ...
+  # ...
+
+
+# =====================================================
+#
+# NETWORKS
+#
+# =====================================================
+
+
+# Declaration des reseaux
+networks:
+  weather:
+    name: weather
+
+
+# =====================================================
+#
+# VOLUMES
+#
+# =====================================================
+
+    
+# Declaration des volumes
+volumes:
+  minio_data:
+  mlflow-postgres-db:
+  airflow-postgres-db:
+  weather-postgres-db:
