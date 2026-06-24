@@ -1,0 +1,5 @@
+{
+  "POSTGRES_WTH_DB": "weather",
+  "POSTGRES_WTH_USER": "weather",
+  "POSTGRES_WTH_PASSWORD": "CHANGE_ME"
+}
