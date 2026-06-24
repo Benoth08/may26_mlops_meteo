@@ -788,7 +788,7 @@ def split_train_test(
     df_for_sort: Optional[pd.DataFrame] = None,
     test_size: float = 0.2,
     random_state: int = 42,
-    split_strategy: str = "random",
+    split_strategy: str = "temporal",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
     Sépare les données en train/test.
@@ -846,7 +846,7 @@ def prepare_data(
     data_path: Optional[str] = None,
     test_size: float = 0.2,
     random_state: int = 42,
-    split_strategy: str = "random",
+    split_strategy: str = "temporal",
     missing_threshold: float = HIGH_MISSING_THRESHOLD,
     drop_high_missing: bool = False,
     save_report: bool = True,
@@ -1077,7 +1077,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--split-strategy",
         type=str,
-        default="random",
+        default="temporal",
         choices=["random", "temporal"],
         help="Stratégie de split : random ou temporal.",
     )
