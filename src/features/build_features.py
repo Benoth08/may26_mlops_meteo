@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 TARGET = "RainTomorrow"
 
-DEFAULT_DATA_PATH = r"C:\Users\ander\OneDrive\Documents\Projet_MLOPs\weatherAUS.csv"
+DEFAULT_DATA_PATH = "data/raw/weatherAUS.csv"
 
 HIGH_MISSING_THRESHOLD = 0.30
 
