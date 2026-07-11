@@ -1,3 +1,24 @@
+#!/usr/bin/env python3
+"""
+===============================================================================
+    mai26_continu_mlops / projet Weather : Predict next-day rain in Australia
+    ---------------------------------------------------------------------------
+    Sujet :
+        Orchestration Airflow de l'entraînement
+
+    Description :
+        DAG qui orchestre la chaîne complète en conteneurs Docker :
+        ingestion, préparation, recherche des hyperparamètres, entraînement,
+        évaluation et promotion du modèle.
+
+    Version :
+        1.0.0
+
+    Historique :
+        2026-07-11  -  Création du module
+===============================================================================
+"""
+
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
 
@@ -157,12 +178,18 @@ with DAG(
 
     # -----------------------------------------
     # Etape 5 - Evaluation du modele
-    # Calcule les metriques sur le jeu de test
+    # Calcule les metriques sur le jeu de test et enregistre le modele dans MLflow
+    # Les variables MLflow permettent la connexion au serveur DagsHub
     # -----------------------------------------
     evaluation = DockerOperator(
         task_id="evaluate_model",
         image="model-evaluation:latest",
         command="python -m src.models.evaluate_model",
+        environment={
+            "MLFLOW_TRACKING_URI": "{{ var.value.MLFLOW_TRACKING_URI }}",
+            "MLFLOW_TRACKING_USERNAME": "{{ var.value.MLFLOW_TRACKING_USERNAME }}",
+            "MLFLOW_TRACKING_PASSWORD": "{{ var.value.MLFLOW_TRACKING_PASSWORD }}",
+        },
         docker_url="unix://var/run/docker.sock",
         network_mode="weather",
         mounts=mounts_ml,
@@ -181,6 +208,8 @@ with DAG(
         command="python -m src.models.promote_model",
         environment={
             "MLFLOW_TRACKING_URI": "{{ var.value.MLFLOW_TRACKING_URI }}",
+            "MLFLOW_TRACKING_USERNAME": "{{ var.value.MLFLOW_TRACKING_USERNAME }}",
+            "MLFLOW_TRACKING_PASSWORD": "{{ var.value.MLFLOW_TRACKING_PASSWORD }}",
         },
         docker_url="unix://var/run/docker.sock",
         network_mode="weather",
