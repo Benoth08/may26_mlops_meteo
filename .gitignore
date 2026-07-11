@@ -8,16 +8,16 @@ venv/
 .env
 config/variables.json
 
-# --- Données & artefacts (racine du projet) ---
-/data/
-/models/*
-!/models/.gitkeep
-/metrics/
+# --- Données & artefacts (versionnés via DVC, pas Git — voir *.dvc et dvc.yaml) ---
 /logs/*
 !/logs/.gitkeep
 /reports/figures/*
 !/reports/figures/.gitkeep
 /reports/*.csv
+
+# Seul le résumé des métriques (petit JSON) est suivi directement par Git
+/metrics/*
+!/metrics/scores.json
 
 # --- Artefacts ML & données (partout) ---
 *.pkl

@@ -1,0 +1,38 @@
+stages:
+  make_dataset:
+    cmd: python -m src.data.make_dataset
+    deps:
+    - data/raw/weatherAUS.csv
+    - src/data/make_dataset.py
+    - src/features/build_features.py
+    outs:
+    - data/processed/dataset.joblib
+    - models/preprocessor.joblib
+  grid_search:
+    cmd: python -m src.models.grid_search
+    deps:
+    - data/processed/dataset.joblib
+    - models/preprocessor.joblib
+    - src/models/grid_search.py
+    outs:
+    - models/best_params.joblib
+  train_model:
+    cmd: python -m src.models.train_model
+    deps:
+    - data/processed/dataset.joblib
+    - models/best_params.joblib
+    - models/preprocessor.joblib
+    - src/models/train_model.py
+    outs:
+    - models/model.joblib
+  evaluate_model:
+    cmd: python -m src.models.evaluate_model
+    deps:
+    - data/processed/dataset.joblib
+    - models/model.joblib
+    - src/models/evaluate_model.py
+    outs:
+    - data/predictions.csv
+    metrics:
+    - metrics/scores.json:
+        cache: false
