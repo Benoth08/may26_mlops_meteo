@@ -26,6 +26,16 @@ fi
 export PYTHONIOENCODING=utf-8
 export PATH="$(pwd)/$VENV_BIN:$PATH"
 
+# Charge .env si present (MLFLOW_TRACKING_URI/USERNAME/PASSWORD, voir
+# scripts/mlflow/configure.sh) pour que evaluate_model.py logue aussi dans
+# MLflow. Sans .env, la pipeline tourne normalement, juste sans tracking.
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 echo "== DAG de la pipeline =="
 "$VENV_BIN/python" -m dvc dag
 

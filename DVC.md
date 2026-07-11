@@ -117,6 +117,17 @@ Pousser / récupérer les données (DagsHub)
 
 `dvc push`/`dvc pull` nécessitent que `./scripts/dvc/configure-remote.sh` ait été exécuté au préalable.
 
+### Erreur SSL au push/pull (`CERTIFICATE_VERIFY_FAILED`, "Basic Constraints of CA cert not marked critical")
+
+Symptôme d'un antivirus/pare-feu qui inspecte le trafic HTTPS (rencontré avec Norton 360, mais peut arriver avec Kaspersky, ESET, Bitdefender, un proxy d'entreprise...). Deux options :
+
+1. **Corriger à la racine** : désactiver l'inspection SSL/TLS de l'antivirus (ou ajouter une exception pour `dagshub.com`). Voir `JOURNAL_SESSION_DVC.md` section 12 pour le détail de ce qui a été essayé.
+2. **Contourner côté DVC** (n'importe quel antivirus) :
+   ```bash
+   dvc remote modify origin --local ssl_verify false
+   ```
+   Désactive la vérification du certificat uniquement pour les échanges avec ce remote. Déjà appliqué sur cette machine.
+
 Autres commandes utiles
 --------------------------
 
