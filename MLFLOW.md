@@ -47,6 +47,13 @@ Chaque exécution du stage `evaluate_model` affiche un lien direct vers le run :
 
 Ou directement dans l'interface DagsHub du dépôt, onglet **Experiments**.
 
+Model Registry
+------------------
+
+En plus du run/experiment, chaque exécution réussie de `evaluate_model` enregistre automatiquement une **nouvelle version** du modèle dans le Model Registry MLflow, sous le nom `weather-rain-model` (visible dans l'onglet **Models** sur DagsHub, ou `mlflow.sklearn.log_model(..., registered_model_name="weather-rain-model")` dans le code).
+
+⚠️ Une version est créée à **chaque** run, y compris pour des essais/tests — pas de filtre automatique sur la qualité du modèle. Pour choisir un modèle à déployer, il faut aller dans l'UI (onglet Models → `weather-rain-model`) et promouvoir manuellement la version voulue vers un stage (`Staging`/`Production`), ou nettoyer périodiquement les versions non retenues.
+
 Limitations connues
 ----------------------
 
@@ -57,5 +64,6 @@ Prochaines étapes possibles
 --------------------------------
 
 - Comparer plusieurs runs dans l'UI MLflow pour choisir un modèle à déployer.
-- Enregistrer le meilleur modèle dans le **Model Registry** MLflow (`mlflow.register_model`), pour préparer le service d'inférence (`inference_api.py`).
+- Promouvoir une version du Model Registry vers `Production`, pour préparer le service d'inférence (`inference_api.py`).
 - Logger aussi les métriques intermédiaires du `grid_search` (actuellement seul `evaluate_model` logue dans MLflow).
+- Filtrer l'enregistrement automatique (ex: seulement si `f1` dépasse un seuil), pour éviter d'accumuler des versions de tests.
