@@ -69,3 +69,4 @@ uvloop==0.22.1
 watchdog==6.0.0
 watchfiles==1.2.0
 websockets==16.0
+dvc==3.67.1
