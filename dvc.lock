@@ -1,0 +1,94 @@
+schema: '2.0'
+stages:
+  make_dataset:
+    cmd: python -m src.data.make_dataset
+    deps:
+    - path: data/raw/weatherAUS.csv
+      hash: md5
+      md5: a65cf8b8719b1a65db4f361eeec18457
+      size: 14094055
+    - path: src/data/make_dataset.py
+      hash: md5
+      md5: d7d66e4b0c3bf726ca4fb0c1047a9748
+      size: 933
+    - path: src/features/build_features.py
+      hash: md5
+      md5: 04265204a5e20f88e0553831f2fe2066
+      size: 34838
+    outs:
+    - path: data/processed/dataset.joblib
+      hash: md5
+      md5: 662cf07e19d0bedebaf5ae7b133c9374
+      size: 49203875
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 945f3a522dbaff47908d64e93be5bfe4
+      size: 1792
+  grid_search:
+    cmd: python -m src.models.grid_search
+    deps:
+    - path: data/processed/dataset.joblib
+      hash: md5
+      md5: 662cf07e19d0bedebaf5ae7b133c9374
+      size: 49203875
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 945f3a522dbaff47908d64e93be5bfe4
+      size: 1792
+    - path: src/models/grid_search.py
+      hash: md5
+      md5: 6e978ab4ef07f0290bb1a32d8ceed81a
+      size: 1271
+    outs:
+    - path: models/best_params.joblib
+      hash: md5
+      md5: 27a9c24a462b351fe2fa5e8eb9046f62
+      size: 62
+  train_model:
+    cmd: python -m src.models.train_model
+    deps:
+    - path: data/processed/dataset.joblib
+      hash: md5
+      md5: 662cf07e19d0bedebaf5ae7b133c9374
+      size: 49203875
+    - path: models/best_params.joblib
+      hash: md5
+      md5: 27a9c24a462b351fe2fa5e8eb9046f62
+      size: 62
+    - path: models/preprocessor.joblib
+      hash: md5
+      md5: 945f3a522dbaff47908d64e93be5bfe4
+      size: 1792
+    - path: src/models/train_model.py
+      hash: md5
+      md5: fb0c5e428b7d8c7097979c9e64e8476b
+      size: 1092
+    outs:
+    - path: models/model.joblib
+      hash: md5
+      md5: bd5c8cda5e1737c03193b0b88e9f0725
+      size: 6970079
+  evaluate_model:
+    cmd: python -m src.models.evaluate_model
+    deps:
+    - path: data/processed/dataset.joblib
+      hash: md5
+      md5: 662cf07e19d0bedebaf5ae7b133c9374
+      size: 49203875
+    - path: models/model.joblib
+      hash: md5
+      md5: bd5c8cda5e1737c03193b0b88e9f0725
+      size: 6970079
+    - path: src/models/evaluate_model.py
+      hash: md5
+      md5: 93dde67ebb120409c75ee0e41f67a439
+      size: 1364
+    outs:
+    - path: data/predictions.csv
+      hash: md5
+      md5: b1a8b67ac68182a320e2982338fe1808
+      size: 643376
+    - path: metrics/scores.json
+      hash: md5
+      md5: dd879675477e4a8b7f3b233065e699e1
+      size: 215
