@@ -50,8 +50,11 @@ def main():
             mlflow.log_metrics(scores)
             # cloudpickle : le format par defaut (skops) ne reconnait pas
             # encore les objets LightGBM (UntrustedTypesFoundException).
+            # registered_model_name : enregistre automatiquement une nouvelle
+            # version dans le Model Registry MLflow a chaque run.
             mlflow.sklearn.log_model(
-                model, "model", serialization_format="cloudpickle")
+                model, "model", serialization_format="cloudpickle",
+                registered_model_name="weather-rain-model")
 
     print("✅ evaluate_model OK")
     for k, v in scores.items():
