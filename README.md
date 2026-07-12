@@ -37,7 +37,8 @@ Les conteneurs principaux du projet :
 
 - PostgreSQL météo (persistant) : la base de données qui stocke les observations météo. C'est la source unique des données pour tout le reste du projet, elle doit rester disponible en permanence.
 - Intégration des données (éphémère) : charge le fichier CSV dans la base PostgreSQL, puis s'arrête. C'est une tâche ponctuelle, pas un service.
-- API (persistant) : un service FastAPI qui reste actif pour répondre aux requêtes à tout moment. Il permet de consulter les données et de demander une prévision de pluie.
+- API de données (persistant) : un service FastAPI qui interroge la base pour consulter les observations météo déjà ingérées (dernier import, valeurs par date et station).
+- API de prédiction (persistant) : un second service FastAPI qui charge le modèle entraîné et prédit s'il pleuvra demain, à partir d'observations envoyées en JSON ou en CSV.
 
 L'orchestration est assurée par Airflow, qui planifie et lance automatiquement les étapes du projet (par exemple l'ingestion). Airflow est un système distribué : sa stack (base interne, file Redis, planificateur, worker, serveur web) est persistante, sauf le conteneur d'initialisation qui est éphémère (il prépare Airflow au premier démarrage puis s'arrête).
 
@@ -45,7 +46,7 @@ En complément, une petite interface Streamlit sert de vitrine de démonstration
 
 À noter : il n'y a pas encore de conteneur Docker pour l'entraînement. Aujourd'hui, l'entraînement du modèle se lance en local (avec run_ml.py ou les quatre scripts de src), pas dans Docker. Les conteneurs d'entraînement, d'évaluation et de validation du modèle existent uniquement sous forme de lignes commentées dans le docker-compose : ils sont prévus mais pas encore construits. Les quatre scripts modulaires sont justement faits pour cela : chacun deviendra un conteneur éphémère (préparation, entraînement, évaluation), orchestré par Airflow ou via la pipeline DVC.
 
-En résumé : l'application météo tourne sur trois conteneurs principaux (base de données persistante, ingestion éphémère, API persistante), Airflow ajoute le moteur d'orchestration, et Streamlit offre une interface de démonstration.
+En résumé : l'application météo tourne sur quatre conteneurs principaux (base de données persistante, ingestion éphémère, API de données et API de prédiction toutes deux persistantes), Airflow ajoute le moteur d'orchestration, et Streamlit offre une interface de démonstration.
 
 
 Repository Tree
@@ -110,7 +111,8 @@ may26_mlops_meteo/
     │       └── init_weather.sql  <- Création de la table PostgreSQL
     └── dockerfiles/              <- Un Dockerfile par service
         ├── airflow/             <- Image Airflow
-        ├── api_weather/         <- Image de l'API
+        ├── api_weather/         <- Image de l'API de données
+        ├── api_inference/       <- Image de l'API de prédiction
         └── data_integration/    <- Image du job d'ingestion
 ```
 
