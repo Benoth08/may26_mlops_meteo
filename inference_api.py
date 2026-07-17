@@ -3,7 +3,7 @@
 Endpoints
 ---------
 GET  /                 infos + lien vers la doc Swagger
-GET  /health           état de l'API + modèle chargé
+GET  /health           état de l'API + modèle disponible
 POST /predict          1 observation (JSON)              -> prédiction
 POST /predict-batch    fichier CSV de nouvelles obs.     -> prédictions
 GET  /predict-from-db  rejoue une ligne déjà ingérée     -> test / démo
@@ -28,7 +28,7 @@ from src.features.build_features import (
     drop_unused_columns, TARGET, TECHNICAL_COLUMNS,
 )
 
-# ── Constantes ────────────────────────────────────────────────────────────────
+# Constantes
 RAW_NUMERIC = [
     "MinTemp", "MaxTemp", "Rainfall", "Evaporation", "Sunshine", "WindGustSpeed",
     "WindSpeed9am", "WindSpeed3pm", "Humidity9am", "Humidity3pm", "Pressure9am",
@@ -49,13 +49,23 @@ DB_COLUMNS = {
     "raintoday": "RainToday", "raintomorrow": "RainTomorrow",
 }
 
-# ── Chargement du modèle (pipeline complet : prétraitement + LightGBM) ─────────
-MODEL_PATH = Path("models/model.joblib")
-if not MODEL_PATH.exists():
-    MODEL_PATH = Path("models/model.pkl")
-if not MODEL_PATH.exists():
-    raise RuntimeError("Aucun modèle trouvé. Lance d'abord l'entraînement (run_ml.py ou les 4 scripts).")
-model = joblib.load(MODEL_PATH)
+# Chargement du modèle (pipeline complet : prétraitement + LightGBM)
+# Chargement tolérant : l'API demarre meme sans modele. Le modele est charge
+# a la premiere prediction, une fois qu'il existe dans le dossier models.
+_model = None
+
+
+def get_model():
+    global _model
+    if _model is None:
+        path = Path("models/model.joblib")
+        if not path.exists():
+            path = Path("models/model.pkl")
+        if not path.exists():
+            raise HTTPException(
+                503, "Aucun modèle disponible. Lancez d'abord l'entraînement.")
+        _model = joblib.load(path)
+    return _model
 
 app = FastAPI(
     title="Weather Inference API",
@@ -64,7 +74,7 @@ app = FastAPI(
 )
 
 
-# ── Schéma d'entrée (1 observation) ───────────────────────────────────────────
+# Schéma d'entrée (1 observation)
 class WeatherInput(BaseModel):
     Date: str
     Location: str
@@ -90,7 +100,7 @@ class WeatherInput(BaseModel):
     RainToday: Optional[str] = None
 
 
-# ── Prétraitement (rejoue le feature engineering de build_features) ────────────
+# Prétraitement (rejoue le feature engineering de build_features)
 def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
     """Transforme des données brutes en features, exactement comme build_features."""
     df = df_raw.copy()
@@ -110,10 +120,10 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 def proba_of(X: pd.DataFrame) -> np.ndarray:
     """Probabilité de pluie (classe 1) pour chaque ligne."""
-    return model.predict_proba(X)[:, 1]
+    return get_model().predict_proba(X)[:, 1]
 
 
-# ── Accès base Postgres (pour le rejeu) ───────────────────────────────────────
+# Accès base Postgres (pour le rejeu)
 def get_engine():
     user = os.getenv("POSTGRES_WTH_USER", "weather")
     pwd = os.getenv("POSTGRES_WTH_PASSWORD", "MLops26")
@@ -138,7 +148,7 @@ def load_row_from_db(date: str, location: str):
     return df.rename(columns=DB_COLUMNS), actual
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# Endpoints
 @app.get("/")
 def root():
     return RedirectResponse(url="/docs")
@@ -146,7 +156,10 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": str(MODEL_PATH)}
+    path = Path("models/model.joblib")
+    if not path.exists():
+        path = Path("models/model.pkl")
+    return {"status": "ok", "model_available": path.exists()}
 
 
 @app.post("/predict")
@@ -188,7 +201,7 @@ async def predict_batch(file: UploadFile = File(...)):
 
 @app.get("/predict-from-db")
 def predict_from_db(date: str, location: str):
-    """Rejoue une ligne DÉJÀ ingérée (test/démo). ⚠️ Non pertinent si la date
+    """Rejoue une ligne DÉJÀ ingérée (test/démo). Non pertinent si la date
     faisait partie de l'entraînement : viser une date hors période de train."""
     df, actual = load_row_from_db(date, location)
     if df is None:
