@@ -1,34 +1,28 @@
-"""Étape 3 — Entraîne le pipeline complet (préprocesseur + LightGBM) avec les
-meilleurs hyperparamètres, sur tout le train."""
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+# Entraînement final : on réentraîne le modèle avec les meilleurs réglages trouvés
 
+import pandas as pd
 import joblib
 from pathlib import Path
 
-from sklearn.pipeline import Pipeline
 from lightgbm import LGBMClassifier
 
 
 def main():
-    data = joblib.load("data/processed/dataset.joblib")
-    preprocessor = joblib.load("models/preprocessor.joblib")
-    best_params = joblib.load("models/best_params.joblib")
+    X_train = pd.read_csv("data/processed/X_train_scaled.csv")
+    y_train = pd.read_csv("data/processed/y_train.csv").squeeze()
 
-    lgbm_params = {k.replace("model__", ""): v for k, v in best_params.items()}
+    # On récupère les hyperparamètres gagnants de l'étape précédente.
+    best_params = joblib.load("models/best_params.pkl")
 
-    pipe = Pipeline(steps=[
-        ("prep", preprocessor),
-        ("model", LGBMClassifier(
-            class_weight="balanced", random_state=42, n_jobs=-1,
-            verbosity=-1, **lgbm_params)),
-    ])
-    pipe.fit(data["X_train"], data["y_train"])
+    # Le même modèle, mais cette fois avec les bons réglages, entraîné sur tout le train.
+    modele = LGBMClassifier(class_weight="balanced", verbosity=-1,random_state=42, n_jobs=-1, **best_params)
+    modele.fit(X_train, y_train)
 
+    # On sauvegarde le modèle entraîné : c'est lui que l'API ira charger.
     Path("models").mkdir(parents=True, exist_ok=True)
-    joblib.dump(pipe, "models/model.joblib")
+    joblib.dump(modele, "models/model.pkl")
 
-    print("✅ train_model OK -> models/model.joblib")
-    print("   Hyperparamètres :", lgbm_params)
+    print("Modèle entraîné et sauvegardé dans models/model.pkl")
 
 
 if __name__ == "__main__":

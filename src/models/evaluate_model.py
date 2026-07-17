@@ -1,12 +1,10 @@
-"""Étape 4 — Évalue le modèle sur le jeu de test mis de côté."""
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+# Évaluation : on mesure les performances du modèle sur le test mis de côté.
 
 import json
-import os
+import pandas as pd
 import joblib
 from pathlib import Path
 
-import pandas as pd
 from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score,
     average_precision_score, precision_score, recall_score,
@@ -14,14 +12,19 @@ from sklearn.metrics import (
 
 
 def main():
-    data = joblib.load("data/processed/dataset.joblib")
-    model = joblib.load("models/model.joblib")
-    best_params = joblib.load("models/best_params.joblib")
+    X_test = pd.read_csv("data/processed/X_test_scaled.csv")
+    y_test = pd.read_csv("data/processed/y_test.csv").squeeze()
+    modele = joblib.load("models/model.pkl")
 
-    X_test, y_test = data["X_test"], data["y_test"]
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
+    # Pour chaque jour : la prédiction (0 ou 1) et la probabilité de pluie qui va avec.
+    y_pred = modele.predict(X_test)
+    y_proba = modele.predict_proba(X_test)[:, 1]
 
+    # On garde une trace des prédictions, ligne par ligne.
+    Path("data").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"prediction": y_pred, "probabilite": y_proba}).to_csv("data/predictions.csv", index=False)
+
+    # On calcule plusieurs métriques pour avoir une vue d'ensemble
     scores = {
         "accuracy": accuracy_score(y_test, y_pred),
         "f1": f1_score(y_test, y_pred),
@@ -31,34 +34,14 @@ def main():
         "recall_pluie": recall_score(y_test, y_pred),
     }
 
+    # On écrit les scores dans un fichier JSON
     Path("metrics").mkdir(parents=True, exist_ok=True)
     with open("metrics/scores.json", "w") as f:
-        json.dump(scores, f, indent=2, default=float)
-    pd.DataFrame({"prediction": y_pred, "probabilite": y_proba}).to_csv(
-        "data/predictions.csv", index=False)
+        json.dump(scores, f, indent=2)
 
-    # Suivi MLflow (DagsHub) : desactive si MLFLOW_TRACKING_URI n'est pas defini,
-    # pour ne pas casser `dvc repro` sur une machine non configuree.
-    if os.environ.get("MLFLOW_TRACKING_URI"):
-        import mlflow
-        import mlflow.sklearn
-
-        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-        mlflow.set_experiment("weather-rain-prediction")
-        with mlflow.start_run():
-            mlflow.log_params(best_params)
-            mlflow.log_metrics(scores)
-            # cloudpickle : le format par defaut (skops) ne reconnait pas
-            # encore les objets LightGBM (UntrustedTypesFoundException).
-            # registered_model_name : enregistre automatiquement une nouvelle
-            # version dans le Model Registry MLflow a chaque run.
-            mlflow.sklearn.log_model(
-                model, "model", serialization_format="cloudpickle",
-                registered_model_name="weather-rain-model")
-
-    print("✅ evaluate_model OK")
-    for k, v in scores.items():
-        print(f"   {k}: {v:.4f}")
+    print("Évaluation terminée.")
+    for nom, valeur in scores.items():
+        print(f"  {nom} : {valeur:.4f}")
 
 
 if __name__ == "__main__":

@@ -1,36 +1,37 @@
-"""Étape 2 — GridSearch (TimeSeriesSplit). Pipeline = préprocesseur + LightGBM,
-re-fitté sur le train de chaque pli -> aucune fuite."""
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+# Recherche des hyperparamètres crossvalin
 
+import pandas as pd
 import joblib
 from pathlib import Path
 
-from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 from lightgbm import LGBMClassifier
 
 
 def main():
-    data = joblib.load("data/processed/dataset.joblib")
-    preprocessor = joblib.load("models/preprocessor.joblib")
+    X_train = pd.read_csv("data/processed/X_train_scaled.csv")
+    y_train = pd.read_csv("data/processed/y_train.csv").squeeze()
 
-    pipe = Pipeline(steps=[
-        ("prep", preprocessor),
-        ("model", LGBMClassifier(
-            class_weight="balanced", random_state=42, n_jobs=1, verbosity=-1)),
-    ])
+    # Equilibrage des classes, car il pleut moins souvent donc classe unbalanced
+    modele = LGBMClassifier(class_weight="balanced", verbosity=-1, random_state=42, n_jobs=-1)
 
-    grid = {"model__n_estimators": [100, 200], "model__num_leaves": [31, 63]}
+    # Hyperparamètres à tester
+    grille = {
+        "n_estimators": [100, 200],
+        "num_leaves": [31, 63],
+    }
+
+    # Validation croisée pour série temporelle
     cv = TimeSeriesSplit(n_splits=3)
-    search = GridSearchCV(pipe, grid, cv=cv, scoring="f1", n_jobs=-1, verbose=1)
-    search.fit(data["X_train"], data["y_train"])
+    recherche = GridSearchCV(modele, grille, cv=cv, scoring="f1", n_jobs=-1)
+    recherche.fit(X_train, y_train)
 
+    # On garde le best modèle
     Path("models").mkdir(parents=True, exist_ok=True)
-    joblib.dump(search.best_params_, "models/best_params.joblib")
+    joblib.dump(recherche.best_params_, "models/best_params.pkl")
 
-    print("✅ grid_search OK")
-    print("   Meilleurs paramètres :", search.best_params_)
-    print("   F1 (CV) :", round(float(search.best_score_), 4))
+    print("Meilleurs paramètres :", recherche.best_params_)
+    print("F1 (validation croisée) :", round(recherche.best_score_, 4))
 
 
 if __name__ == "__main__":
