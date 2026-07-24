@@ -12,7 +12,14 @@ import os
 import mlflow
 from mlflow.tracking import MlflowClient
 
-MODEL_NAME = "weather-rain-model"
+
+from core.settings import SETTINGS
+from core.logger import get_logger
+
+
+logger = get_logger("promote_model")
+
+MODEL_NAME = SETTINGS["models"]["registered_model_name"]
 
 
 def get_new_version(client):

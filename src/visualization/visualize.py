@@ -3,15 +3,27 @@ visualize.py — Visualisations EDA pour données météo.
 Génère 5 figures statiques dans reports/figures/.
 """
 
+from core.settings import SETTINGS
+from core.logger import get_logger
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
 from pathlib import Path
 
+
+logger = get_logger("visualize_model")
+
+DATA_DIR = Path(SETTINGS["paths"]["processed"])
+FIGURES_DIR = Path(SETTINGS["paths"]["figures"])
+
+PREPROCESSED_DATA_PATH = (PROCESSED_DIR / SETTINGS["models"]["preprocessed_data"])
+
+
 # ── Palette & style global ───────────────────────────────────────────────────
 sns.set_theme(style="whitegrid", palette="muted", font_scale=1.1)
-FIGURES_DIR = Path("reports/figures")
+FIGURES_DIR = Path("FIGURES_DIR")
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Noms lisibles des mois en français
@@ -20,8 +32,12 @@ MOIS_FR = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun",
 
 
 # ── Chargement ────────────────────────────────────────────────────────────────
-def load_data(path: str = "data/processed/meteo.csv") -> pd.DataFrame:
+def load_data(path: str) -> pd.DataFrame:
     """Charge le CSV météo, parse la colonne 'date' et trie chronologiquement."""
+    
+    if path is None or :
+        path = PREPROCESSED_DATA_PATH
+       
     df = pd.read_csv(path, parse_dates=["date"])
     df = df.sort_values("date").set_index("date")
     return df
@@ -153,21 +169,30 @@ def plot_calendar_heatmap(df: pd.DataFrame):
 
 # ── Pipeline principal ────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    
+    logger.info({"event": "visualize / loading data"})
+        
     df = load_data()
 
     plot_temperature_series(df)
+    logger.info({"event": "visualize / Série temporelle : OK"})
     print("✓ Série temporelle")
 
     plot_distributions(df)
+    logger.info({"event": "visualize / Distributions : OK"})
     print("✓ Distributions")
 
     plot_correlation_heatmap(df)
+    logger.info({"event": "visualize / Heatmap corrélation : OK"})
     print("✓ Heatmap corrélation")
 
     plot_monthly_boxplot(df)
+    logger.info({"event": "visualize / Boxplot mensuel : OK"})
     print("✓ Boxplot mensuel")
 
     plot_calendar_heatmap(df)
+    logger.info({"event": "visualize / Calendrier heatmap : OK"})
     print("✓ Calendrier heatmap")
 
+    logger.info({"event": "visualize / Figures sauvegardées → {FIGURES_DIR.resolve()}"})
     print(f"\nFigures sauvegardées → {FIGURES_DIR.resolve()}")

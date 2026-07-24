@@ -14,9 +14,41 @@ x-airflow-common:
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    
+    # CONFIG VM LIORA
+    OMP_NUM_THREADS: 1
+    MKL_NUM_THREADS: 1
+    NUMEXPR_NUM_THREADS: 1
+
+    # LIMITER LA CHARGE AIRFLOW
+    AIRFLOW__CORE__PARALLELISM: 2
+    AIRFLOW__CORE__DAG_CONCURRENCY: 2
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 2
+
+    # SCHEDULER
+    AIRFLOW__SCHEDULER__MAX_THREADS: 2
+    AIRFLOW__SCHEDULER__PARSING_PROCESSES: 1
+    AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC: 10
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: 30
+    AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: 10
+  
+    # DAG
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: 60
+
+    # CELERY
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: 1
+    AIRFLOW__CELERY__WORKER_PREFETCH_MULTIPLIER: 1
+    AIRFLOW__CELERY__TASK_ACKS_LATE: "true"
+    AIRFLOW__CELERY__RETRY_DELAY: 60    
+ 
+    # LOGGING LIGHT
+    AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+    AIRFLOW__LOGGING__FAB_LOGGING_LEVEL: WARNING
+    AIRFLOW__LOGGING__COLORED_CONSOLE_LOG: "False"
+    AIRFLOW__LOGGING__MAX_LOG_FILE_SIZE: 5MB
+    
+    #AUTH
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    
-    
     AIRFLOW__CORE__FERNET_KEY: ''
  
           
@@ -36,6 +68,7 @@ x-airflow-common:
 
     # UI / BASE URL
     AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+    AIRFLOW__API__BASE_URL: http://localhost:8080                                             
 
     # MISC
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -75,6 +108,8 @@ services:
   postgres-airflow:
     image: postgres:16
     container_name: airflow-postgres
+    mem_limit: 512m
+    cpus: 1
     environment:
       POSTGRES_USER: ${POSTGRES_AIRF_USER}
       POSTGRES_PASSWORD: ${POSTGRES_AIRF_PASSWORD}
@@ -84,11 +119,11 @@ services:
     networks:
       - weather
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AIRF_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_AIRF_USER} -d ${POSTGRES_AIRF_DB}"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 5s
+      start_period: 20s
     restart: always
  
   # Container : redis / broker entre Airflow Scheduler & Celery Worker
@@ -96,11 +131,14 @@ services:
     image: redis:7.2-bookworm
     expose:
       - 6379
+    command: redis-server --maxmemory 150mb --maxmemory-policy allkeys-lru
+    mem_limit: 256m
+    cpus: 0.3
     networks:
       - weather
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 30s
       timeout: 30s
       retries: 50
       start_period: 30s
@@ -110,6 +148,16 @@ services:
     <<: *airflow-common
     container_name: airflow-apiserver
     command: api-server
+    mem_limit: 2g
+    cpus: 1.0
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__MAX_PAGE_LIMIT: 100
+      AIRFLOW__API__ENABLE_EXPERIMENTAL_API: 'false'
+      AIRFLOW__WEBSERVER__WORKERS: 2
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 120
+      AIRFLOW__WEBSERVER__WEB_SERVER_PORT: 8080  
+      FLASK_LIMITER_STORAGE_URI: redis://redis:6379/1
     ports:
       - "8080:8080"
     networks:
@@ -282,6 +330,13 @@ services:
         else
             echo -e "\033[1;33mWARNING!!!: variables.json not found!\e[0m"
         fi
+        echo
+        echo "Creating Airflow pools..."
+        /entrypoint airflow pools set default_pool 4 "Default pool for general tasks"
+        /entrypoint airflow pools set weather_pool 2 "Pool for weather ingestion tasks"
+        /entrypoint airflow pools set ml_pool 2 "Pool for ML tasks"
+        echo "Pools created."
+        echo
         /entrypoint airflow connections delete weather_postgres || true
         /entrypoint airflow connections add weather_postgres \
             --conn-type postgres \
@@ -347,6 +402,8 @@ services:
   postgres-weather:
     image: postgres:16
     container_name: weather-postgres
+    mem_limit: 256m
+    cpus: 0.5
     ports:
       - "5432:5432"
     environment:
@@ -359,24 +416,30 @@ services:
     networks:
       - weather
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_WTH_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_WTH_USER} -d ${POSTGRES_WTH_DB}"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 5s
+      start_period: 20s
     restart: always
-
  
 
   # Container : api
   api-weather:
     build:
-      context: ./src/dockerfiles/api_weather
-      dockerfile: ./Dockerfile
+      context: .
+      dockerfile: ./src/dockerfiles/api_weather/Dockerfile                              
     container_name: api-weather
+    mem_limit: 256m
+    cpus: 0.3
     env_file:
       - .env
     environment:
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+      NUMEXPR_NUM_THREADS: 1
+      API_AUTH_USERNAME: ${API_AUTH_USERNAME}
+      API_AUTH_PASSWORD_HASH: ${API_AUTH_PASSWORD_HASH}
       POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
       POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
       POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
@@ -390,6 +453,7 @@ services:
       - "8057:8057"
     volumes:
       - ./src/data:/data
+      - ./models:/models
       - ./logs:/logs
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8057/health"]
@@ -407,6 +471,11 @@ services:
     env_file:
       - .env
     environment:
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+      NUMEXPR_NUM_THREADS: 1
+      POSTGRES_WTH_HOST: ${POSTGRES_WTH_HOST}
+      POSTGRES_WTH_PORT: ${POSTGRES_WTH_PORT}
       POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
       POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
       POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
@@ -431,6 +500,61 @@ services:
   # ...
   # ...
 
+  # Container : data-preprocessing
+  data-preprocessing:
+    image: data-preprocessing:latest
+    build:
+      context: .
+      dockerfile: ./src/dockerfiles/data_preprocessing/Dockerfile
+    mem_limit: 256m
+    cpus: 0.3
+    env_file:
+      - .env
+    environment:
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+      NUMEXPR_NUM_THREADS: 1
+      POSTGRES_WTH_HOST: ${POSTGRES_WTH_HOST}
+      POSTGRES_WTH_PORT: ${POSTGRES_WTH_PORT}
+      POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
+      POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
+      POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
+    depends_on:
+      airflow-apiserver:
+        condition: service_healthy
+      postgres-weather:
+        condition: service_healthy
+    networks:
+      - weather
+    volumes:
+      - ./src/data:/data
+      - ./models:/models
+      - ./logs:/logs
+  
+  
+  # Container : model-training / model-evaluation
+  models:
+    image: models:latest
+    build:
+      context: .
+      dockerfile: ./src/dockerfiles/models/Dockerfile
+    mem_limit: 4g
+    cpus: 2
+    env_file:
+      - .env
+    environment:
+      OMP_NUM_THREADS: 1
+      MKL_NUM_THREADS: 1
+      NUMEXPR_NUM_THREADS: 1
+    depends_on:
+      airflow-apiserver:
+        condition: service_healthy
+    networks:
+      - weather
+    volumes:
+      - ./src/data:/data
+      - ./models:/models
+      - ./logs:/logs                                
 
 # =====================================================
 #

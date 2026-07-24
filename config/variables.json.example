@@ -1,5 +1,10 @@
 {
   "POSTGRES_WTH_DB": "weather",
   "POSTGRES_WTH_USER": "weather",
-  "POSTGRES_WTH_PASSWORD": "CHANGE_ME"
+  "POSTGRES_WTH_PASSWORD": "CHANGE_ME",
+  "POSTGRES_WTH_HOST": "weather-postgres",
+  "POSTGRES_WTH_PORT": 5432,
+  "MLFLOW_TRACKING_URI": "https://dagshub.com/Benoth08/may26_mlops_meteo.mlflow",
+  "MLFLOW_TRACKING_USERNAME": "",
+  "MLFLOW_TRACKING_PASSWORD": ""
 }

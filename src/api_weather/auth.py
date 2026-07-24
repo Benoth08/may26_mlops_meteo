@@ -19,14 +19,11 @@
         2026-07-12  -  Création du module
 ===============================================================================
 """
-
-import os
 import secrets
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from passlib.context import CryptContext
-
 
 # Schema de securite HTTP Basic
 security = HTTPBasic()
@@ -34,32 +31,43 @@ security = HTTPBasic()
 # Contexte passlib pour verifier le mot de passe contre son empreinte bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Identifiants attendus, lus depuis le .env
-# API_AUTH_USERNAME       : l'identifiant en clair
-# API_AUTH_PASSWORD_HASH  : l'empreinte bcrypt du mot de passe (jamais le mot de passe en clair)
-EXPECTED_USERNAME = os.environ.get("API_AUTH_USERNAME", "")
-EXPECTED_PASSWORD_HASH = os.environ.get("API_AUTH_PASSWORD_HASH", "")
 
-
-def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
-    # Comparaison de l'identifiant en temps constant (protege des attaques temporelles)
-    username_ok = secrets.compare_digest(
-        credentials.username.encode("utf8"),
-        EXPECTED_USERNAME.encode("utf8"),
-    )
-
+def _verify_credentials(username: str, password: str, expected: dict) -> bool:
+    """
+    Comparaison en temps constant (secrets.compare_digest) pour éviter une
+    timing attack. Séparée de check_auth() pour rester testable sans avoir
+    à construire une fausse requête FastAPI.
+    """
+    valid_user = secrets.compare_digest(username.encode("utf8"), expected["user"].encode("utf8"))
+    
     # Verification du mot de passe recu contre l'empreinte bcrypt rangee dans le .env
-    password_ok = False
-    if EXPECTED_PASSWORD_HASH:
-        password_ok = pwd_context.verify(credentials.password, EXPECTED_PASSWORD_HASH)
+    valid_pwd = pwd_context.verify(password, expected["password"])
+    return valid_user and valid_pwd
+
+
+def check_auth(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+) -> bool:
+    """
+    Dépendance FastAPI utilisée par tous les endpoints protégés :
+        auth: bool = Depends(check_auth)
+
+    Lève 503 si l'API n'a pas encore fini son startup (credentials pas
+    chargés), 401 si les identifiants sont invalides.
+    """
+    creds = request.app.state.api_credentials
+    if not creds:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Authentication unavailable")
 
     # Si l'un des deux echoue, on refuse avec une erreur 401 et l'en-tete Basic
-    if not (username_ok and password_ok):
+    if not _verify_credentials(credentials.username, credentials.password, creds):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Identifiants invalides",
             headers={"WWW-Authenticate": "Basic"},
         )
+        
+    # Identifiants valides : on renvoie true
+    return True
 
-    # Identifiants valides : on renvoie l'identifiant
-    return credentials.username

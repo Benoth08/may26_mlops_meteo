@@ -42,67 +42,63 @@ Colonnes techniques (date_import, data_source, run_id) :
 
 import argparse
 import logging
+import os
+import uuid
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from core.config import load_postgres_config
+from core.logger import get_logger
+from core.settings import SETTINGS
+from core.metadata import COLUMN_CONSTRAINTS, REQUIRED_COLUMNS, TECHNICAL_COLUMNS, NON_TECHNICAL_COLUMNS, FEATURE_COLUMNS, WIND_DIRECTION_COLUMNS, NUMERIC_COLUMNS, CATEGORICAL_COLUMNS, get_all_columns, normalize_column_name, normalize_data
+
+
+# Les variables de threads doivent être posées AVANT l'import de numpy /
+# pandas / sklearn pour avoir un effet (BLAS/OMP les lit à l'import).
+for _env_key, _env_val in SETTINGS["threads"].items():
+    os.environ.setdefault(_env_key, str(_env_val))
+
 import numpy as np
 import pandas as pd
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger("build_features")
 
 
 # ============================================================
 # Constantes
+# ------------------------------------------------------------
+# IMPORTANT : toutes les constantes métier (colonnes, contraintes,
+# seuils, valeurs NA...) proviennent de settings.SETTINGS, qui est
+# la source de vérité unique du projet (voir settings.py). Elles ne
+# doivent JAMAIS être redéfinies ici.
 # ============================================================
 
-TARGET = "RainTomorrow"
-
-DEFAULT_DATA_PATH = "data/raw/weatherAUS.csv"
-
-HIGH_MISSING_THRESHOLD = 0.30
-
-# Colonnes de traçabilité Airflow/PostgreSQL : conservées pour le monitoring
-# mais systématiquement exclues des features du modèle.
-TECHNICAL_COLUMNS = ["date_import", "data_source", "run_id"]
-
-REQUIRED_COLUMNS = [
-    "Date",
-    "Location",
-    "MinTemp",
-    "MaxTemp",
-    "Rainfall",
-    "Evaporation",
-    "Sunshine",
-    "WindGustDir",
-    "WindGustSpeed",
-    "WindDir9am",
-    "WindDir3pm",
-    "WindSpeed9am",
-    "WindSpeed3pm",
-    "Humidity9am",
-    "Humidity3pm",
-    "Pressure9am",
-    "Pressure3pm",
-    "Cloud9am",
-    "Cloud3pm",
-    "Temp9am",
-    "Temp3pm",
-    "RainToday",
-    "RainTomorrow",
-]
-
-WIND_DIRECTION_COLUMNS = ["WindGustDir", "WindDir9am", "WindDir3pm"]
+TARGET = SETTINGS["target"]["column_norm"]
+LOCATION = SETTINGS["location"]["column_norm"]
+ 
+HIGH_MISSING_THRESHOLD = SETTINGS["missing_threshold"]
+SPLIT_STRATEGY = SETTINGS["split_strategy"]
 
 # Degrés pour chaque direction cardinale, N = 0°, sens horaire.
-COMPASS_DEGREES: Dict[str, float] = {
-    direction: i * (360.0 / 16)
-    for i, direction in enumerate([
-        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-    ])
-}
+COMPASS_DEGREES: Dict[str, float] = SETTINGS["compass_degrees"]
+ 
+# Valeurs considérées comme NA (CSV + Postgres)
+POSTGRES_NA_VALUES = SETTINGS["na_values"]
+
+REPORTS_DIR = Path(SETTINGS["paths"]["reports"])
+PROCESSED_DIR = Path(SETTINGS["paths"]["processed"])
+PREPROCESSED_DATA_PATH = PROCESSED_DIR / SETTINGS["models"]["preprocessed_data"]
+
+IMPORT_DATE_COL = SETTINGS["postgres"]["importdate_column_norm"]  # "date_import"
+
+TABLE_CLEAN = SETTINGS["postgres"]["table_clean"]
+CLEAN_DATE_COL = SETTINGS["postgres"]["cleandate_column_norm"] 
+RUNID_COL = SETTINGS["postgres"]["cleanrunid_column_norm"]
+SOURCE_COL = SETTINGS["postgres"]["cleansource_column_norm"]
+
+
+
 
 
 # ============================================================
@@ -128,43 +124,119 @@ def load_data_from_csv(data_path: str) -> pd.DataFrame:
         raise FileNotFoundError(f"Fichier introuvable : {data_path}")
 
     logger.info("Chargement CSV depuis %s", data_path)
-    return pd.read_csv(path)
+    
+    df = pd.read_csv(path)
+
+    # Normalisation des noms de colonne
+    return normalize_data(df)
 
 
 def load_data_from_postgres(connection_uri: str, table_name: str) -> pd.DataFrame:
     """
     Charge le dataset depuis une table PostgreSQL via SQLAlchemy.
-
-    Parameters
-    ----------
-    connection_uri : str
-        URI de connexion SQLAlchemy.
-        Exemple : postgresql://user:pwd@localhost:5432/db_name
-    table_name : str
-        Nom de la table à lire.
-
-    Returns
-    -------
-    pd.DataFrame
-
-    Notes
-    -----
-    Dépendances requises : sqlalchemy, psycopg2-binary.
-    Les colonnes techniques date_import, data_source, run_id seront présentes
-    si elles existent en base ; elles seront exclues des features du modèle.
     """
+
     try:
-        from sqlalchemy import create_engine
+        from sqlalchemy import create_engine, inspect, text
     except ImportError as exc:
         raise ImportError(
             "sqlalchemy est requis pour charger depuis PostgreSQL. "
             "Installez-le avec : pip install sqlalchemy psycopg2-binary"
         ) from exc
 
-    logger.info("Connexion PostgreSQL, lecture de la table '%s'", table_name)
-    engine = create_engine(connection_uri)
-    return pd.read_sql(f"SELECT * FROM {table_name}", engine)  # noqa: S608
+    logger.info(
+        "Connexion PostgreSQL, lecture de la table '%s'",
+        table_name
+    )
 
+    engine = create_engine(connection_uri)
+
+    inspector = inspect(engine)
+
+    if "." in table_name:
+        schema, table = table_name.split(".")
+    else:
+        schema = None
+        table = table_name
+
+    if not inspector.has_table(table, schema=schema):
+        raise ValueError(
+            f"Table inexistante : {table_name}"
+        )
+
+    columns = ", ".join(NON_TECHNICAL_COLUMNS)
+
+    query = text(
+        f"""
+        SELECT {columns}
+        FROM {table_name}
+        WHERE {IMPORT_DATE_COL} = (
+            SELECT MAX({IMPORT_DATE_COL})
+            FROM {table_name}
+        )
+        """
+    )
+
+    logger.info("Requête PostgreSQL : '%s'", query)
+
+    df = pd.read_sql(query, engine)
+
+
+    # ==========================================================
+    # Normalisation des valeurs manquantes
+    # ==========================================================
+
+    logger.info({
+        "event": "postgres_before_na_cleaning",
+        "rain_tomorrow_values": (
+            df["rain_tomorrow"]
+            .value_counts(dropna=False)
+            .to_dict()
+            if "rain_tomorrow" in df.columns
+            else None
+        )
+    })
+
+
+    # Nettoyage uniquement des colonnes texte
+    object_columns = df.select_dtypes(
+        include=["object", "string"]
+    ).columns
+
+    for col in object_columns:
+        df[col] = (
+            df[col]
+            .astype("string")
+            .str.strip()
+            .replace(POSTGRES_NA_VALUES, pd.NA)
+        )
+
+        # Conversion pandas NA -> numpy NaN.
+        # NB : `df.replace({pd.NA: np.nan})` ne fonctionne PAS de façon
+        # fiable (pd.NA a une sémantique d'égalité spéciale : pd.NA == pd.NA
+        # ne vaut pas True, donc .replace() ne le reconnaît pas comme une
+        # valeur à remplacer). On repasse la colonne en dtype "object" et on
+        # utilise .where()/.notna(), qui gèrent pd.NA correctement.
+        df[col] = df[col].astype(object).where(df[col].notna(), np.nan)                                                                      
+
+
+    logger.info({
+        "event": "postgres_after_na_cleaning",
+        "rain_tomorrow_values": (
+            df["rain_tomorrow"]
+            .value_counts(dropna=False)
+            .to_dict()
+            if "rain_tomorrow" in df.columns
+            else None
+        )
+    })
+
+
+    # Normalisation des noms de colonne
+    df = normalize_data(df)
+
+
+    return df
 
 def load_data_from_api(api_url: str) -> pd.DataFrame:
     """
@@ -202,10 +274,14 @@ def load_data_from_api(api_url: str) -> pd.DataFrame:
     payload = response.json()
 
     if isinstance(payload, list):
-        return pd.DataFrame(payload)
-    if isinstance(payload, dict) and "data" in payload:
-        return pd.DataFrame(payload["data"])
-    return pd.DataFrame(payload)
+        df = pd.DataFrame(payload)
+    elif isinstance(payload, dict) and "data" in payload:
+        df = pd.DataFrame(payload["data"])
+    else:
+        df = pd.DataFrame(payload)
+
+    # Normalisation des noms de colonne
+    return normalize_data(df)
 
 
 def load_dataset(
@@ -225,7 +301,7 @@ def load_dataset(
     source : {"csv", "postgres", "api"}
         Source de données. Par défaut : "csv".
     data_path : str, optional
-        Chemin CSV. Requis si source="csv". Utilise DEFAULT_DATA_PATH si absent.
+        Chemin CSV. Requis si source="csv".
     connection_uri : str, optional
         URI SQLAlchemy. Requis si source="postgres".
     table_name : str, optional
@@ -237,8 +313,16 @@ def load_dataset(
     -------
     pd.DataFrame
     """
+    
+    logger.info({
+        "event": "loading data",
+        "source": source
+    })
+        
     if source == "csv":
-        return load_data_from_csv(data_path or DEFAULT_DATA_PATH)
+        if not data_path:
+            raise ValueError("source='csv' requiert data_path.")
+        return load_data_from_csv(data_path)
 
     if source == "postgres":
         if not connection_uri or not table_name:
@@ -256,19 +340,13 @@ def load_dataset(
         f"Source inconnue : '{source}'. Valeurs acceptées : csv, postgres, api."
     )
 
-
-def load_data(data_path: str) -> pd.DataFrame:
-    """Alias rétrocompatible de load_data_from_csv."""
-    return load_data_from_csv(data_path)
-
-
+    
 # ============================================================
 # Validation du schéma
 # ============================================================
 
 def validate_schema(
-    df: pd.DataFrame,
-    required_columns: Optional[List[str]] = None,
+    df: pd.DataFrame, columns: Optional[List[str]] = None
 ) -> None:
     """
     Vérifie que le dataset contient toutes les colonnes attendues.
@@ -278,17 +356,248 @@ def validate_schema(
     ValueError
         Si une ou plusieurs colonnes obligatoires sont absentes.
     """
-    if required_columns is None:
-        required_columns = REQUIRED_COLUMNS
-
-    missing_columns = [col for col in required_columns if col not in df.columns]
+    expected_columns = columns or REQUIRED_COLUMNS
+    
+    # Détection des colonnes manquantes
+    missing_columns = sorted(set(expected_columns) - set(df.columns))
 
     if missing_columns:
         raise ValueError(
             "Le dataset ne respecte pas le schéma attendu. "
             f"Colonnes manquantes : {missing_columns}"
+            f"Colonnes reçues : {list(df.columns)}"
         )
 
+
+# ============================================================
+# Convertion du type des colonnes
+# ============================================================
+
+def convert_types(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convertit automatiquement les colonnes selon les contraintes définies
+    dans COLUMN_CONSTRAINTS :
+    - type : float, datetime, string
+    - nullable : True/False
+    - allowed_values : liste de valeurs autorisées
+    - range : (min, max)
+    """
+
+    df = df.copy()
+
+    for col, meta in COLUMN_CONSTRAINTS.items():
+     
+        # Si la colonne n'existe pas, on logge et on continue
+        if meta["norm_name"] not in df.columns:
+            logger.warning(f"Colonne absente dans le DataFrame : {col}/{meta['norm_name']}")
+            continue
+
+        col_type = meta.get("type")
+        col_norm = meta["norm_name"]
+
+        # --- Conversion float ---
+        if col_type == "float":
+            df[col_norm] = pd.to_numeric(df[col_norm], errors="coerce")
+
+            # Vérification des valeurs hors plage
+            if "range" in meta:
+                min_val, max_val = meta["range"]
+                out_of_range = df[(df[col_norm] < min_val) | (df[col_norm] > max_val)]
+                if not out_of_range.empty:
+                    logger.warning(
+                        f"Valeurs hors plage détectées dans {col} "
+                        f"({min_val} → {max_val}). "
+                        f"Lignes concernées : {len(out_of_range)}"
+                    )
+
+        # --- Conversion datetime ---
+        elif col_type == "datetime":
+            df[col_norm] = pd.to_datetime(df[col_norm], errors="coerce")
+
+        # --- Conversion string ---
+        elif col_type == "string":
+            df[col_norm] = df[col_norm].astype(object)
+
+            # Vérification des valeurs autorisées
+            allowed = meta.get("allowed_values")
+            if allowed is not None:
+                invalid = df[df[col_norm].notna() & ~df[col_norm].isin(allowed)]
+                if not invalid.empty:
+                    logger.warning(
+                        f"Valeurs invalides détectées dans {col}. "
+                        f"Modalités autorisées : {allowed}. "
+                        f"Lignes concernées : {len(invalid)}"
+                    )
+
+        # --- Vérification nullable ---
+        if meta.get("nullable") is False:
+            if df[col_norm].isna().any():
+                missing = df[df[col_norm].isna()]
+                logger.error(
+                    f"Colonne {col} ne doit pas contenir de valeurs manquantes. "
+                    f"Lignes concernées : {len(missing)}"
+                )
+                raise ValueError(f"Valeurs manquantes détectées dans {col}, qui est non-nullable.")
+
+    return df
+
+
+# ============================================================
+# Sauvegarde des données nettoyées vers PostgreSQL (table clean)
+# ============================================================
+
+def build_postgres_engine(connection_uri: Optional[str] = None):
+    """
+    Construit un engine SQLAlchemy.
+
+    Si connection_uri n'est pas fourni, utilise la configuration Postgres
+    du projet (variables d'environnement, voir config.load_postgres_config).
+    """
+    from sqlalchemy import create_engine
+
+    if connection_uri is None:
+        connection_uri = load_postgres_config().sqlalchemy_uri
+
+    return create_engine(connection_uri)
+
+
+def add_technical_columns(
+    df: pd.DataFrame,
+    data_source: str,
+    run_id: str,
+) -> pd.DataFrame:
+    """
+    Ajoute les colonnes techniques d'audit (date_import, data_source, run_id)
+    définies dans metadata.TECHNICAL_COLUMNS, utilisées pour le monitoring
+    Airflow et pour ne lire que le dernier import (voir load_data_from_postgres).
+    """
+    df = df.copy()
+
+    df[CLEAN_DATE_COL] = pd.Timestamp.now(tz="UTC")
+    df[SOURCE_COL] = data_source
+    df[RUNID_COL] = run_id
+
+    return df
+
+
+def save_clean_data_to_csv(
+    df: pd.DataFrame
+) -> Path:
+    """
+    Sauvegarde les données nettoyées dans un fichier CSV.
+
+    Si le fichier existe déjà, les nouvelles lignes sont ajoutées à la suite
+    (mode append, cohérent avec if_exists="append" côté Postgres) ; sinon le
+    fichier est créé avec l'en-tête.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Données déjà nettoyées et enrichies des colonnes techniques
+        (date_import, data_source, run_id).
+    
+    Returns
+    -------
+    Path
+        Chemin du fichier écrit.
+    """
+    PREPROCESSED_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    file_exists = PREPROCESSED_DATA_PATH.exists()
+    df.to_csv(PREPROCESSED_DATA_PATH, mode="a", header=not file_exists, index=False)
+
+    logger.info({
+        "event": "clean_data_saved_csv",
+        "path": str(PREPROCESSED_DATA_PATH),
+        "rows": len(df),
+        "mode": "append" if file_exists else "create",
+    })
+
+    return PREPROCESSED_DATA_PATH
+
+def save_prepared_data(
+    data: pd.DataFrame,
+    source: str,
+    run_id: Optional[str] = None,
+    connection_uri: Optional[str] = None,
+    table_name: Optional[str] = None
+):
+    """
+    Insère data["df_clean"] (données nettoyées / typées, post convert_types,
+    AVANT tout feature engineering ML) dans la table Postgres "clean"
+    (weather_data_clean par défaut). Ne fait aucun encodage / scaling.
+
+   """
+    run_id = run_id or str(uuid.uuid4())
+
+    ordered_columns = list(FEATURE_COLUMNS)
+
+    missing = [c for c in ordered_columns if c not in data.columns]
+    if missing:
+        raise ValueError(f"Colonnes manquantes avant sauvegarde : {missing}")
+
+    df_to_insert = add_technical_columns(data, data_source=source, run_id=run_id)
+
+    logger.info({
+        "event": "saving_clean_data",
+        "destination": source,
+        "rows": len(df_to_insert),
+        "run_id": run_id
+    })               
+    if source == "csv":
+        save_clean_data_to_csv(df_to_insert)
+
+    elif source == "postgres":
+        logger.info({
+            "event": "saving_clean_data_postgres",
+            "table_name": table_name,
+            "connection": connection_uri
+        })   
+        
+        required_params = {
+            "table_name": table_name,
+            "connection_uri": connection_uri,
+        }
+        missing = [
+            name for name, value in required_params.items()
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Paramètre(s) obligatoire(s) non fourni(s) : {', '.join(missing)}"
+            )
+        
+        engine = None
+        try:
+            engine = build_postgres_engine(connection_uri)
+
+            with engine.begin() as connection:
+                df_to_insert.to_sql(
+                    table_name,
+                    connection,
+                    if_exists="append",
+                    index=False,
+                    method="multi",
+                    chunksize=1000
+                )
+
+        except Exception:
+            logger.error("Erreur lors de l'insertion PostgreSQL")
+            raise
+        finally:
+            if engine:
+                engine.dispose()
+                
+    elif source == "api":
+        ### meme stockage que csv
+        save_clean_data_to_csv(df_to_insert)
+    else:
+        raise ValueError(
+            f"Source inconnue : '{source}'. Valeurs acceptées : csv, postgres, api."
+        )  
+    
+    logger.info({"event": "save_completed", "destination": source, "rows": len(df_to_insert), "run_id": run_id})
+     
 
 # ============================================================
 # Rapport des valeurs manquantes
@@ -323,14 +632,17 @@ def build_missing_values_report(df: pd.DataFrame) -> pd.DataFrame:
 
 def save_missing_values_report(
     report: pd.DataFrame,
-    output_path: str = "reports/missing_values_report.csv",
+    output_dir: Path = REPORTS_DIR,
 ) -> None:
+    
     """Sauvegarde le rapport des valeurs manquantes."""
-    output_file = Path(output_path)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / SETTINGS["models"]["reports"]
 
     report.to_csv(output_file, index=False)
 
+    logger.info({"event": "missing_values_report_saved", "path": str(output_file)})
 
 def identify_high_missing_columns(
     df: pd.DataFrame,
@@ -366,7 +678,10 @@ def identify_high_missing_columns(
 # Nettoyage de la cible
 # ============================================================
 
-def clean_target(df: pd.DataFrame) -> pd.DataFrame:
+def clean_target(
+    df: pd.DataFrame,
+    target: Optional[str] = TARGET
+) -> pd.DataFrame:
     """
     Nettoie et encode la variable cible RainTomorrow.
 
@@ -374,24 +689,73 @@ def clean_target(df: pd.DataFrame) -> pd.DataFrame:
     - suppression des lignes où RainTomorrow est manquante ;
     - encodage binaire : No = 0, Yes = 1.
     """
-    df = df.copy()
+    
+    logger.info({
+            "event": "starting clean-target",
+            "target": target
+    })
 
-    df = df.dropna(subset=[TARGET])
+    target = normalize_column_name(target)
 
+    logger.info({
+            "event": "normalize target",
+            "target": target
+    })
+    
+    df = df.copy() 
+
+    logger.info(
+        "POSTGRES_NA_VALUES=%s",
+        POSTGRES_NA_VALUES
+    )
+    logger.info(
+        "Modalités RainTomorrow avant drop : %s",
+        df[target].value_counts(dropna=False).to_dict()
+    )
+    df = df.dropna(subset=[target])
+    
+    logger.info(
+        "Modalités RainTomorrow après drop mapping : %s",
+        df[target].value_counts(dropna=False).to_dict()
+    )
+    
     target_mapping = {"No": 0, "Yes": 1}
-    df[TARGET] = df[TARGET].map(target_mapping)
+    df[target] = df[target].map(target_mapping)
+    
+    logger.info(
+        "Modalités RainTomorrow après mapping : %s",
+        df[target].value_counts(dropna=False).to_dict()
+    )
 
-    if df[TARGET].isna().any():
+    if df[target].isna().any():
+        
+        missing_idx = df[df[target].isna()].index.tolist()
+
+        # Aperçu des lignes fautives (limité à 5 pour éviter les logs énormes)
+        sample_rows = df.loc[missing_idx].head(5)
+
+        logger.error(
+            "La variable cible contient des valeurs manquantes. "
+            f"Nombre de lignes concernées : {len(missing_idx)}. "
+            f"Index des premières lignes : {missing_idx[:10]}"
+        )
+
+        logger.error("Aperçu des lignes concernées :\n%s", sample_rows)
+    
         raise ValueError(
             "La variable cible contient des modalités inattendues. "
             "Modalités attendues : 'Yes' et 'No'."
         )
 
-    df[TARGET] = df[TARGET].astype(int)
+    df[target] = df[target].astype(int)
 
     return df
 
 
+# ============================================================
+# Encodage des features
+# ============================================================    
+    
 def encode_rain_today(df: pd.DataFrame) -> pd.DataFrame:
     """
     Encode RainToday en binaire (0/1) pour cohérence avec RainTomorrow.
@@ -400,7 +764,9 @@ def encode_rain_today(df: pd.DataFrame) -> pd.DataFrame:
     Evite les 2 colonnes OHE et traite RainToday comme une variable numérique.
     """
     df = df.copy()
-    df["RainToday"] = df["RainToday"].map({"No": 0, "Yes": 1})
+    
+    raintoday = normalize_column_name("RainToday")
+    df[raintoday] = df[raintoday].map({"No": 0, "Yes": 1})
     return df
 
 
@@ -408,28 +774,129 @@ def encode_rain_today(df: pd.DataFrame) -> pd.DataFrame:
 # Traitement de la date
 # ============================================================
 
+import re
+import pandas as pd
+
+
 def parse_date_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convertit la colonne Date en datetime.
 
+    Le format attendu est YYYY-MM-DD.
     Les dates invalides sont transformées en NaT puis supprimées.
     """
     df = df.copy()
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"])
+    date_norm = normalize_column_name("Date")
+
+    # Vérifie le format avant conversion
+    valid_format = df[date_norm].astype(str).str.match(r"^\d{4}-\d{2}-\d{2}$")
+
+    if (~valid_format).any():
+        invalid_rows = df.loc[~valid_format, [date_norm]]
+
+        logger.warning(
+            "Format de date invalide détecté (%s lignes). Exemples : %s",
+            len(invalid_rows),
+            invalid_rows.head(10).to_dict("records"),
+        )
+
+    # Conversion en datetime
+    df[date_norm] = pd.to_datetime(
+        df[date_norm],
+        format="%Y-%m-%d",
+        errors="coerce",
+    )
+
+    # Suppression des dates invalides
+    before = len(df)
+    df = df.dropna(subset=[date_norm])
+
+    logger.info(
+        "Suppression de %s lignes contenant une date invalide.",
+        before - len(df),
+    )
 
     return df
 
 
 def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Crée des variables temporelles à partir de Date."""
+    """
+    Crée les variables temporelles à partir de Date.
+
+    La colonne Date doit être convertible en datetime.
+    Les dates invalides sont supprimées.
+    """
     df = df.copy()
 
-    df["Year"] = df["Date"].dt.year
-    df["Month"] = df["Date"].dt.month
-    df["Day"] = df["Date"].dt.day
-    df["DayOfYear"] = df["Date"].dt.dayofyear
+    date_norm = normalize_column_name("Date")
+
+    # Vérification présence colonne
+    if date_norm not in df.columns:
+        raise ValueError(
+            f"Impossible de créer les variables temporelles : "
+            f"colonne '{date_norm}' absente."
+        )
+
+    # Vérification / conversion du type
+    if not pd.api.types.is_datetime64_any_dtype(df[date_norm]):
+        logger.warning(
+            "La colonne %s n'est pas au format datetime. Conversion forcée.",
+            date_norm
+        )
+
+        df[date_norm] = pd.to_datetime(
+            df[date_norm],
+            format="%Y-%m-%d",
+            errors="coerce"
+        )
+
+    # Vérification des dates invalides
+    invalid_dates = df[date_norm].isna()
+
+    if invalid_dates.any():
+        count = invalid_dates.sum()
+        logger.error(
+            "Dates invalides détectées dans %s : %s lignes supprimées",
+            date_norm,
+            count
+        )
+
+        df = df.dropna(subset=[date_norm])
+
+
+    # Contrôle avant création des features temporelles
+    if df.empty:
+        raise ValueError(
+            "Impossible de créer les features temporelles : "
+            "le DataFrame ne contient aucune ligne."
+        )
+
+    if date_norm not in df.columns:
+        raise ValueError(
+            f"Impossible de créer les features temporelles : "
+            f"colonne '{date_norm}' absente."
+        )
+
+    if not pd.api.types.is_datetime64_any_dtype(df[date_norm]):
+        raise TypeError(
+            f"Impossible de créer les features temporelles : "
+            f"la colonne '{date_norm}' n'est pas au format datetime "
+            f"(type détecté : {df[date_norm].dtype})."
+        )
+
+    if df[date_norm].isna().any():
+        nb_dates_invalides = df[date_norm].isna().sum()
+        raise ValueError(
+            f"Impossible de créer les features temporelles : "
+            f"{nb_dates_invalides} date(s) invalide(s) détectée(s)."
+        )
+
+    # Création des features temporelles
+    df[normalize_column_name("Year")] = df[date_norm].dt.year
+    df[normalize_column_name("Month")] = df[date_norm].dt.month
+    df[normalize_column_name("Day")] = df[date_norm].dt.day
+    df[normalize_column_name("DayOfYear")] = df[date_norm].dt.dayofyear
 
     return df
 
@@ -443,16 +910,21 @@ def add_cyclical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    df["Month_sin"] = np.sin(2 * np.pi * df["Month"] / 12)
-    df["Month_cos"] = np.cos(2 * np.pi * df["Month"] / 12)
+    month_norm = normalize_column_name("Month")
+    doy_norm = normalize_column_name("DayOfYear")
+    df[normalize_column_name("Month_sin")] = np.sin(2 * np.pi * df[month_norm] / 12)
+    df[normalize_column_name("Month_cos")] = np.cos(2 * np.pi * df[month_norm] / 12)
 
-    df["DayOfYear_sin"] = np.sin(2 * np.pi * df["DayOfYear"] / 365)
-    df["DayOfYear_cos"] = np.cos(2 * np.pi * df["DayOfYear"] / 365)
+    df[normalize_column_name("DayOfYear_sin")] = np.sin(2 * np.pi * df[doy_norm] / 365)
+    df[normalize_column_name("DayOfYear_cos")] = np.cos(2 * np.pi * df[doy_norm] / 365)
 
     return df
 
 
-def encode_wind_directions(df: pd.DataFrame) -> pd.DataFrame:
+def encode_wind_directions(
+    df: pd.DataFrame,
+    wind_direction_columns: Optional[List[str]] = WIND_DIRECTION_COLUMNS,
+) -> pd.DataFrame:
     """
     Convertit les colonnes de direction de vent en encodage cyclique sin/cos.
 
@@ -461,9 +933,11 @@ def encode_wind_directions(df: pd.DataFrame) -> pd.DataFrame:
     N (0°) et NNW (337.5°) sont voisins, ce qu'OHE ne peut pas capturer.
     Les colonnes string originales sont supprimées après transformation.
     """
+    wind_direction_columns = [normalize_column_name(c) for c in wind_direction_columns]
+
     df = df.copy()
 
-    for col in WIND_DIRECTION_COLUMNS:
+    for col in wind_direction_columns:
         if col not in df.columns:
             continue
 
@@ -496,31 +970,37 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    df["TempRange"] = df["MaxTemp"] - df["MinTemp"]
-    df["TempChange"] = df["Temp3pm"] - df["Temp9am"]
+    df[normalize_column_name("TempRange")] = df[normalize_column_name("MaxTemp")] - df[normalize_column_name("MinTemp")]
+    df[normalize_column_name("TempChange")] = df[normalize_column_name("Temp3pm")] - df[normalize_column_name("Temp9am")]
 
-    df["HumidityDrop"] = df["Humidity9am"] - df["Humidity3pm"]
-    df["PressureDrop"] = df["Pressure9am"] - df["Pressure3pm"]
-    df["WindSpeedChange"] = df["WindSpeed3pm"] - df["WindSpeed9am"]
+    df[normalize_column_name("HumidityDrop")] = df[normalize_column_name("Humidity9am")] - df[normalize_column_name("Humidity3pm")]
+    df[normalize_column_name("PressureDrop")] = df[normalize_column_name("Pressure9am")] - df[normalize_column_name("Pressure3pm")]
+    df[normalize_column_name("WindSpeedChange")] = df[normalize_column_name("WindSpeed3pm")] - df[normalize_column_name("WindSpeed9am")]
 
-    df["RainfallLog1p"] = np.log1p(df["Rainfall"].clip(lower=0))
+    df[normalize_column_name("RainfallLog1p")] = np.log1p(df[normalize_column_name("Rainfall")].clip(lower=0))
 
-    df["HasRainfall"] = np.where(
-        df["Rainfall"].isna(),
+    hrf_norm = normalize_column_name("HasRainfall")
+    rainfall_norm = normalize_column_name("Rainfall")
+    df[hrf_norm] = np.where(
+        df[rainfall_norm].isna(),
         np.nan,
-        (df["Rainfall"] > 0).astype(int),
+        (df[rainfall_norm] > 0).astype(int),
     )
 
-    df["HighHumidity3pm"] = np.where(
-        df["Humidity3pm"].isna(),
+    hh3pm_norm = normalize_column_name("HighHumidity3pm")
+    hum3pm_norm = normalize_column_name("Humidity3pm")
+    df[hh3pm_norm] = np.where(
+        df[hum3pm_norm].isna(),
         np.nan,
-        (df["Humidity3pm"] >= 70).astype(int),
+        (df[hum3pm_norm] >= 70).astype(int),
     )
 
-    df["StrongWindGust"] = np.where(
-        df["WindGustSpeed"].isna(),
+    swg_norm = normalize_column_name("StrongWindGust")
+    wgs_norm = normalize_column_name("WindGustSpeed")
+    df[swg_norm] = np.where(
+        df[wgs_norm].isna(),
         np.nan,
-        (df["WindGustSpeed"] >= 50).astype(int),
+        (df[wgs_norm] >= 50).astype(int),
     )
 
     return df
@@ -544,7 +1024,7 @@ def drop_high_missing_columns(
     df = df.copy()
 
     if protected_columns is None:
-        protected_columns = [TARGET, "Date"]
+        protected_columns = [normalize_column_name(TARGET), normalize_column_name("Date")]
 
     columns_to_drop = [
         col for col in high_missing_columns
@@ -554,7 +1034,11 @@ def drop_high_missing_columns(
     return df.drop(columns=columns_to_drop)
 
 
-def drop_unused_columns(df: pd.DataFrame) -> pd.DataFrame:
+
+def drop_unused_columns(
+    df: pd.DataFrame,
+    technical_columns: Optional[List[str]] = TECHNICAL_COLUMNS,
+) -> pd.DataFrame:
     """
     Supprime les colonnes inutiles après feature engineering.
 
@@ -564,9 +1048,11 @@ def drop_unused_columns(df: pd.DataFrame) -> pd.DataFrame:
     - data_source  : colonne technique Airflow, hors features modèle
     - run_id       : colonne technique Airflow, hors features modèle
     """
+    technical_columns = [normalize_column_name(c) for c in technical_columns]
+
     df = df.copy()
 
-    columns_to_drop = ["Date"] + TECHNICAL_COLUMNS
+    columns_to_drop = ["date"] + technical_columns
     existing_columns = [col for col in columns_to_drop if col in df.columns]
 
     return df.drop(columns=existing_columns)
@@ -576,18 +1062,26 @@ def drop_unused_columns(df: pd.DataFrame) -> pd.DataFrame:
 # Séparation X / y
 # ============================================================
 
-def split_features_target(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+def split_features_target(
+    df: pd.DataFrame,
+    target: Optional[str] = TARGET,
+    technical_columns: Optional[List[str]] = TECHNICAL_COLUMNS
+) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Sépare les variables explicatives X et la cible y.
 
     Les colonnes techniques (TECHNICAL_COLUMNS) sont exclues de X
     si elles n'ont pas déjà été supprimées par drop_unused_columns.
     """
-    cols_to_exclude = [TARGET] + [
-        c for c in TECHNICAL_COLUMNS if c in df.columns
+    
+    target = normalize_column_name(target)
+    technical_columns = [normalize_column_name(c) for c in technical_columns]
+            
+    cols_to_exclude = [target] + [
+        c for c in technical_columns if c in df.columns
     ]
     X = df.drop(columns=cols_to_exclude)
-    y = df[TARGET]
+    y = df[target]
 
     return X, y
 
@@ -596,15 +1090,14 @@ def split_features_target(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
 # Identification des types de variables
 # ============================================================
 
-def identify_feature_types(X: pd.DataFrame) -> Tuple[List[str], List[str]]:
-    """Identifie automatiquement les variables numériques et catégorielles."""
-    numeric_features = X.select_dtypes(
-        include=["int64", "float64", "int32", "float32"]
-    ).columns.tolist()
+def identify_feature_types(
+    X: pd.DataFrame
+) -> Tuple[List[str], List[str]]:
+    """Identifie les variables numériques et catégorielles à partir du contrat de données du DF."""
+    
+    numeric_features = NUMERIC_COLUMNS
 
-    categorical_features = X.select_dtypes(
-        include=["object", "category", "bool"]
-    ).columns.tolist()
+    categorical_features = CATEGORICAL_COLUMNS
 
     return numeric_features, categorical_features
 
@@ -708,8 +1201,9 @@ def build_preprocessor(
         ]
     )
 
-    location_features = [col for col in categorical_features if col == "Location"]
-    other_cat_features = [col for col in categorical_features if col != "Location"]
+    loc_norm = normalize_column_name("Location")
+    location_features = [col for col in categorical_features if col == loc_norm]
+    other_cat_features = [col for col in categorical_features if col != loc_norm]
 
     transformers: List = [("numeric", numeric_pipeline, numeric_features)]
 
@@ -728,8 +1222,10 @@ def build_preprocessor(
 
 def prepare_dataframe(
     df: pd.DataFrame,
+    target: str,
+    technical_columns: List[str],
     high_missing_columns: Optional[List[str]] = None,
-    drop_high_missing: bool = False,
+    drop_high_missing: bool = False
 ) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     """
     Applique les transformations déterministes.
@@ -751,9 +1247,8 @@ def prepare_dataframe(
     à l'intérieur d'un Pipeline sklearn. Ainsi le test set reste un
     témoin strictement indépendant.
     """
-    validate_schema(df)
+    df = clean_target(df, target=target)
 
-    df = clean_target(df)
     df = encode_rain_today(df)
     df = parse_date_column(df)
 
@@ -768,12 +1263,12 @@ def prepare_dataframe(
         df = drop_high_missing_columns(
             df=df,
             high_missing_columns=high_missing_columns,
-            protected_columns=[TARGET, "Date"],
+            protected_columns=[target, normalize_column_name("date")],
         )
 
-    df = drop_unused_columns(df)
+    df = drop_unused_columns(df, technical_columns=technical_columns)
 
-    X, y = split_features_target(df)
+    X, y = split_features_target(df, target=target, technical_columns=technical_columns)
 
     return X, y, df_with_date
 
@@ -788,7 +1283,7 @@ def split_train_test(
     df_for_sort: Optional[pd.DataFrame] = None,
     test_size: float = 0.2,
     random_state: int = 42,
-    split_strategy: str = "temporal",
+    split_strategy: str = SPLIT_STRATEGY,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
     Sépare les données en train/test.
@@ -818,12 +1313,13 @@ def split_train_test(
             stratify=y,
         )
 
-    if df_for_sort is None or "Date" not in df_for_sort.columns:
+    date_norm = normalize_column_name("Date")
+    if df_for_sort is None or date_norm not in df_for_sort.columns:
         raise ValueError(
             "Pour split_strategy='temporal', df_for_sort doit contenir Date."
         )
 
-    ordered_index = df_for_sort.sort_values("Date").index
+    ordered_index = df_for_sort.sort_values(date_norm).index
 
     X_ordered = X.loc[ordered_index]
     y_ordered = y.loc[ordered_index]
@@ -846,7 +1342,7 @@ def prepare_data(
     data_path: Optional[str] = None,
     test_size: float = 0.2,
     random_state: int = 42,
-    split_strategy: str = "temporal",
+    split_strategy: str = SPLIT_STRATEGY,
     missing_threshold: float = HIGH_MISSING_THRESHOLD,
     drop_high_missing: bool = False,
     save_report: bool = True,
@@ -872,7 +1368,7 @@ def prepare_data(
     Parameters
     ----------
     data_path : str, optional
-        Chemin CSV. Utilisé si source="csv". Défaut : DEFAULT_DATA_PATH.
+        Chemin CSV. Utilisé si source="csv".
     source : {"csv", "postgres", "api"}
         Source de données. Par défaut : "csv".
     connection_uri : str, optional
@@ -882,6 +1378,24 @@ def prepare_data(
     api_url : str, optional
         URL de l'endpoint. Requis si source="api".
     """
+    
+    run_id = str(uuid.uuid4())
+    
+    logger.info({
+        "event": "init_data_preprocessing",
+        "source": source,
+        "data_path": data_path,
+        "connection_uri": connection_uri,
+        "table_name": table_name,
+        "api_url": api_url
+    })
+    
+    if split_strategy is None:
+        split_strategy = SPLIT_STRATEGY
+    
+    if split_strategy not in ["random", "temporal"]:
+        raise ValueError("split_strategy doit être 'random' ou 'temporal'.")
+        
     raw_df = load_dataset(
         source=source,
         data_path=data_path,
@@ -890,24 +1404,60 @@ def prepare_data(
         api_url=api_url,
     )
 
-    validate_schema(raw_df)
+    logger.info({
+        "event": "normalizing_columns"
+    })
+    
+    df_norm = normalize_data(raw_df)
 
-    missing_report = build_missing_values_report(raw_df)
+    # Version normalisée du target
+    target_norm = normalize_column_name(TARGET)
+    
+    logger.info({
+        "event": "schema_data_validating"
+    })
+    
+    validate_schema(df_norm, REQUIRED_COLUMNS)
+
+    logger.info({
+        "event": "converting_types_data"
+    })
+    
+    df_norm_conv = convert_types(df_norm)
+
+    missing_report = build_missing_values_report(df_norm_conv)
 
     high_missing_columns = identify_high_missing_columns(
-        df=raw_df,
+        df=df_norm_conv,
         threshold=missing_threshold,
-        exclude_columns=[TARGET],
+        exclude_columns=[target_norm],
     )
 
     if save_report:
         save_missing_values_report(missing_report)
 
     X, y, df_with_date = prepare_dataframe(
-        df=raw_df,
+        df=df_norm_conv,
+        target=target_norm,
+        technical_columns= TECHNICAL_COLUMNS,
         high_missing_columns=high_missing_columns,
-        drop_high_missing=drop_high_missing,
+        drop_high_missing=drop_high_missing
     )
+
+    LOCATION = normalize_column_name("Location")
+
+    known_locations = sorted(
+        X[LOCATION]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    logger.info({
+        "event": "known_locations_detected",
+        "count": len(known_locations),
+        "locations": known_locations
+    })
 
     numeric_features, categorical_features = identify_feature_types(X)
 
@@ -925,6 +1475,39 @@ def prepare_data(
         split_strategy=split_strategy,
     )
 
+    
+    logger.info({
+        "event": "end_data_preprocessing",
+        "X_train_shape": X_train.shape,
+        "X_test_shape": X_test.shape,
+        "y_train_shape": y_train.shape,
+        "y_test_shape": y_test.shape,
+        "y_train_distribution": y_train.value_counts(normalize=True).to_dict(),
+        "y_test_distribution": y_test.value_counts(normalize=True).to_dict(),
+        "numeric_features_count": len(numeric_features),
+        "categorical_features_count": len(categorical_features),
+        "high_missing_columns": high_missing_columns
+        })
+    
+    try:
+        logger.info("Enregistrement des données nettoyées")
+        save_prepared_data(
+                data=df_norm_conv,
+                source=source,
+                run_id=run_id,
+                connection_uri=connection_uri,
+                table_name=TABLE_CLEAN
+            )
+        logger.info("Fin enregistrement des données nettoyées")
+        
+    except Exception as e:
+        logger.error({
+            "event": "erreur_",
+            "error": str(e),
+            "run_id": run_id
+        })
+        
+        
     return {
         "X_train": X_train,
         "X_test": X_test,
@@ -935,6 +1518,14 @@ def prepare_data(
         "categorical_features": categorical_features,
         "missing_report": missing_report,
         "high_missing_columns": high_missing_columns,
+        "feature_schema": {
+            "numeric": numeric_features,
+            "categorical": categorical_features
+        },
+        "data_version": {
+            "rows": len(raw_df),
+            "columns": len(raw_df.columns)
+        }
     }
 
 
@@ -1029,7 +1620,6 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help=(
             "Chemin vers weatherAUS.csv (source=csv). "
-            f"Défaut : {DEFAULT_DATA_PATH}"
         ),
     )
 
@@ -1099,6 +1689,34 @@ def parse_arguments() -> argparse.Namespace:
         "--no-save-report",
         action="store_true",
         help="Désactive la sauvegarde du rapport des valeurs manquantes.",
+    )
+
+    parser.add_argument(
+        "--save-clean-to-postgres",
+        action="store_true",
+        help=(
+            "Insère les données nettoyées / typées (avant feature engineering ML) "
+            "dans la table Postgres clean, juste après convert_types."
+        ),
+    )
+    
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Identifiant de run stocké dans la colonne technique run_id (généré si absent).",
+    )
+    parser.add_argument(
+        "--clean-connection-uri",
+        type=str,
+        default=None,
+        help="URI SQLAlchemy pour l'écriture vers la table clean (défaut : config.load_postgres_config).",
+    )
+    parser.add_argument(
+        "--clean-table-name",
+        type=str,
+        default=SETTINGS["postgres"]["table_clean"],
+        help="Table Postgres cible pour l'insertion des données nettoyées.",
     )
 
     return parser.parse_args()

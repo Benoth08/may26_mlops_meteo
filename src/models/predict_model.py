@@ -17,37 +17,45 @@
 ===============================================================================
 """
 
-from sklearn.experimental import enable_iterative_imputer
+import os
+from core.logger import get_logger
+from core.settings import SETTINGS
+for _env_key, _env_val in SETTINGS["threads"].items():
+    os.environ.setdefault(_env_key, str(_env_val))
+from core.metadata import NUMERIC_COLUMNS, TARGET, TECHNICAL_COLUMNS, normalize_column_name, normalize_data
+
+from build_features import (
+    encode_rain_today, parse_date_column, add_temporal_features,
+    add_cyclical_features, encode_wind_directions, add_weather_features, drop_unused_columns
+)
+
+
+
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 
 from pathlib import Path
 
 import joblib
 import pandas as pd
 
-from src.features.build_features import (
-    encode_rain_today, parse_date_column, add_temporal_features,
-    add_cyclical_features, encode_wind_directions, add_weather_features,
-    drop_unused_columns, TARGET, TECHNICAL_COLUMNS,
-)
+logger = get_logger("predict_model")
 
-RAW_NUMERIC = [
-    "MinTemp", "MaxTemp", "Rainfall", "Evaporation", "Sunshine", "WindGustSpeed",
-    "WindSpeed9am", "WindSpeed3pm", "Humidity9am", "Humidity3pm", "Pressure9am",
-    "Pressure3pm", "Cloud9am", "Cloud3pm", "Temp9am", "Temp3pm",
-]
 
+MODELS_DIR = Path(SETTINGS["paths"]["models"])
+MODEL_PATH = (MODELS_DIR / SETTINGS["models"]["model"])
+MODEL_PKL_PATH = (MODELS_DIR / SETTINGS["models"]["model_pkl"])
 
 def load_model(model_path=None):
     if model_path is None:
-        model_path = Path("models/model.joblib")
+        model_path = Path(MODEL_PATH)
         if not model_path.exists():
-            model_path = Path("models/model.pkl")
+            model_path = Path(MODEL_PKL_PATH)
     return joblib.load(model_path)
 
 
 def featurize(df_raw):
     df = df_raw.copy()
-    for c in RAW_NUMERIC:
+    for c in NUMERIC_COLUMNS:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df = encode_rain_today(df)
