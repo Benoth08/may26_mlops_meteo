@@ -177,6 +177,7 @@ SQL_BATCH_SIZE = 500
 # Dossiers du projet
 # ============================================================================
 DATA_DIR = Path("/data")
+RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 ARCHIVE_DIR = DATA_DIR / "archive"
 MODELS_DIR = Path("/models")
@@ -272,7 +273,7 @@ SETTINGS = {
     },
 
     "paths": {
-        "data": DATA_DIR,
+        "data": RAW_DIR,
         "processed": PROCESSED_DIR,
         "archive": ARCHIVE_DIR,
         "models": MODELS_DIR,

@@ -19,19 +19,19 @@ from core.logger import get_logger
 
 logger = get_logger("promote_model")
 
-MODEL_NAME = SETTINGS["models"]["registered_model_name"]
+REGISTERED_MODEL_NAME = SETTINGS["models"]["registered_model_name"]
 
 
 def get_new_version(client):
     # evaluate_model enregistre chaque run comme une nouvelle version sans stage
-    versions = client.get_latest_versions(MODEL_NAME, stages=["None"])
+    versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["None"])
     if not versions:
         return None
     return versions[0]
 
 
 def get_production_version(client):
-    versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+    versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Production"])
     if not versions:
         return None
     return versions[0]
@@ -61,7 +61,7 @@ def main():
     # ou s'il n'y a pas encore de modele en production
     if prod_f1 is None or new_f1 > prod_f1:
         client.transition_model_version_stage(
-            name=MODEL_NAME,
+            name=REGISTERED_MODEL_NAME,
             version=new.version,
             stage="Production",
             archive_existing_versions=True,

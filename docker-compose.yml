@@ -554,6 +554,7 @@ services:
     volumes:
       - ./src/data:/data
       - ./models:/models
+      - ./metrics:/metrics
       - ./logs:/logs                                
 
 # =====================================================

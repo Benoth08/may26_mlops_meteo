@@ -33,6 +33,8 @@ METRICS_PATH = (METRICS_DIR / SETTINGS["models"]["metrics"])
 PREDICTIONS_PATH = (DATA_DIR / SETTINGS["models"]["predictions"])
 BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
 
+REGISTERED_MODEL_NAME = SETTINGS["models"]["registered_model_name"]
+
 
 def main():
     
@@ -92,7 +94,8 @@ def main():
             # cloudpickle : le format par defaut (skops) ne reconnait pas
             # encore les objets LightGBM (UntrustedTypesFoundException).
             mlflow.sklearn.log_model(
-                model, "model", serialization_format="cloudpickle")
+                model, "model", serialization_format="cloudpickle",
+                registered_model_name=REGISTERED_MODEL_NAME)
 
     logger.info({"event": "model_evaluated", "scores": scores})
     

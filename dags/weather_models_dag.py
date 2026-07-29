@@ -46,7 +46,7 @@ mounts = [
     ),
     Mount(
         source="/home/ubuntu/projet_weather/metrics",
-        target="/app/metrics",
+        target="/metrics",
         type="bind",
     ),
     Mount(
