@@ -1,0 +1,68 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+
+scrape_configs:
+
+  # =====================================================
+  # PROMETHEUS
+  # =====================================================
+
+  - job_name: "prometheus"
+
+    static_configs:
+      - targets:
+          - "prometheus:9090"
+
+
+  # =====================================================
+  # NGINX
+  # =====================================================
+
+  - job_name: "nginx"
+
+    static_configs:
+      - targets:
+          - "nginx-exporter:9113"
+
+
+  # =====================================================
+  # WEATHER FASTAPI
+  # =====================================================
+
+  - job_name: "weather-api"
+
+    metrics_path: /metrics/
+
+    static_configs:
+
+      - targets:
+          - "api-weather-1:8057"
+        labels:
+          replica: "api-weather-1"
+
+      - targets:
+          - "api-weather-2:8057"
+        labels:
+          replica: "api-weather-2"
+
+      - targets:
+          - "api-weather-3:8057"
+        labels:
+          replica: "api-weather-3"
+
+      - targets:
+          - "api-weather-4:8057"
+        labels:
+          replica: "api-weather-4"
+
+      - targets:
+          - "api-weather-5:8057"
+        labels:
+          replica: "api-weather-5"
+
+      - targets:
+          - "api-weather-6:8057"
+        labels:
+          replica: "api-weather-6"

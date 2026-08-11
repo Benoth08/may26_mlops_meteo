@@ -407,3 +407,12 @@ def get_weather_all_features(
         "data": data
     }
 
+
+
+# =============================================================================
+# PROMETHEUS MONITORING
+# =============================================================================
+
+from prometheus_metrics import setup_metrics
+
+setup_metrics(app)
