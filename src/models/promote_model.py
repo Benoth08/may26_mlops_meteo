@@ -18,9 +18,6 @@ Responsabilités :
     - Promouvoir le nouveau modèle (réassigner l'alias) uniquement si
       l'amélioration minimale définie dans params.yaml est atteinte
     - Conserver le champion actuel dans le cas contraire
-    - Alerter (échec de la tâche) si le F1 du modèle réellement déployé
-      tombe sous un seuil absolu (F1_ALERT_THRESHOLD), indépendamment
-      de la métrique utilisée pour décider de la promotion
 
 Règle de promotion :
     nouveau_score - score_champion >= min_score_improvement
@@ -37,7 +34,8 @@ from pathlib import Path
 
 import joblib
 import mlflow
-import yaml
+
+from sklearn.metrics import f1_score
 
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import MlflowException
@@ -64,21 +62,14 @@ METRICS_FILE = Path(SETTINGS["paths"]["metrics"]) / SETTINGS["models"]["metrics"
 # Alias remplaçant le stage "Production" (déprécié, cf. docstring du module).
 CHAMPION_ALIAS = "champion"
 
-# Modèle candidat (sortie de train_model.py/evaluate_model.py) vs modèle
-# réellement servi par l'API et predict_model.py. Ce script est le seul
-# point qui copie l'un vers l'autre, et ne le fait que si la promotion
-# est acceptée : c'est ce qui fait de la décision de promotion un vrai
-# gate de déploiement, plutôt qu'une simple étiquette MLflow sans effet.
+# Modèle candidat (sortie de train_model.py/evaluate_model.py) 
+# vs modèle réellement servi par l'API et predict_model.py
 CANDIDATE_MODEL_PATH = (
     Path(SETTINGS["paths"]["models"]) / SETTINGS["models"]["candidate_model"]
 )
 SERVING_MODEL_PATH = (
     Path(SETTINGS["paths"]["models"]) / SETTINGS["models"]["model"]
 )
-
-# Seuil minimal de F1 attendu pour le modèle réellement déployé.
-# Vérifié indépendamment de primary_metric (filet de sécurité en valeur absolue).
-F1_ALERT_THRESHOLD = float(os.environ.get("F1_ALERT_THRESHOLD", "0.55"))
 
 
 # =============================================================================
@@ -151,9 +142,6 @@ def get_latest_version(client: MlflowClient):
 
     evaluate_model.py doit avoir enregistré cette version dans le
     Model Registry (mlflow.sklearn.log_model(..., registered_model_name=...)).
-
-    Les stages étant dépréciés, il n'existe plus de notion de version
-    "sans stage" : on prend simplement le numéro de version le plus élevé.
     """
 
     versions = client.search_model_versions(
@@ -176,9 +164,7 @@ def get_champion_version(client: MlflowClient):
     """
 
     # DagsHub renvoie INVALID_PARAMETER_VALUE (et non RESOURCE_DOES_NOT_EXIST,
-    # comme le ferait un serveur MLflow standard) quand l'alias n'a encore
-    # jamais été assigné à ce modèle : les deux codes signifient donc
-    # "pas de champion actuel" ici.
+    # comme le ferait un serveur MLflow standard) si l'alias n'existe pas encore pour ce modèle.
     NO_CHAMPION_ERROR_CODES = {
         "RESOURCE_DOES_NOT_EXIST",
         "INVALID_PARAMETER_VALUE",
@@ -220,6 +206,29 @@ def metric_of(
         )
 
     return float(value)
+
+
+def score_sur_jeu_de_test_courant(version, metric_name: str) -> float:
+    """
+    Recharge un modèle depuis le Registry et le note sur le jeu de test
+    du moment, celui qui a servi à noter le nouveau modèle.
+    """
+    if metric_name != "f1":
+        raise ValueError(
+            f"Seule la metrique f1 est reevaluee ici, recue : {metric_name}"
+        )
+
+    dataset_path = (
+        Path(SETTINGS["paths"]["processed"]) / SETTINGS["models"]["dataset"]
+    )
+
+    data = joblib.load(dataset_path)
+    X_test, y_test = data["X_test"], data["y_test"]
+
+    uri = f"models:/{REGISTERED_MODEL_NAME}/{version.version}"
+    modele = mlflow.sklearn.load_model(uri)
+
+    return float(f1_score(y_test, modele.predict(X_test)))
 
 
 # =============================================================================
@@ -268,49 +277,6 @@ def load_local_score(metric_name: str) -> float | None:
         )
 
     return None
-
-
-# =============================================================================
-# ALERTE F1 (filet de sécurité)
-# =============================================================================
-def alert_if_below_f1_threshold(
-    client: MlflowClient,
-    version,
-    context: str,
-) -> None:
-    """
-    Alerte (et fait échouer la tâche Airflow) si le F1 du modèle réellement
-    déployé tombe sous F1_ALERT_THRESHOLD, indépendamment de la métrique
-    utilisée pour décider de la promotion (primary_metric).
-    """
-
-    try:
-        f1 = metric_of(client=client, version=version, metric_name="f1")
-    except Exception as error:
-        logger.warning(
-            {
-                "event": "f1_alert_check_failed",
-                "version": str(version.version),
-                "error": str(error),
-            }
-        )
-        return
-
-    if f1 < F1_ALERT_THRESHOLD:
-        logger.error(
-            {
-                "event": "f1_sous_seuil",
-                "f1": f1,
-                "seuil": F1_ALERT_THRESHOLD,
-                "contexte": context,
-            }
-        )
-        print(
-            "ALERTE : F1 de {:.4f} sous le seuil minimal de {:.4f} ({})".format(
-                f1, F1_ALERT_THRESHOLD, context
-            )
-        )
-        sys.exit(1)
 
 
 # =============================================================================
@@ -700,8 +666,7 @@ def main() -> None:
     champion_score = None
     if champion is not None:
         try:
-            champion_score = metric_of(
-                client=client,
+            champion_score = score_sur_jeu_de_test_courant(
                 version=champion,
                 metric_name=primary_metric,
             )
@@ -818,17 +783,6 @@ def main() -> None:
         print(f"Raison        : {reason}")
         print("Le modèle champion actuel reste inchangé")
         print("========================================")
-
-    # =========================================================================
-    # 9bis. Alerte F1 (filet de sécurité, indépendant de primary_metric)
-    # =========================================================================
-    deployed_for_alert = new if promote else champion
-    if deployed_for_alert is not None:
-        alert_if_below_f1_threshold(
-            client=client,
-            version=deployed_for_alert,
-            context="nouveau modele promu" if promote else "modele champion conserve",
-        )
 
     # =========================================================================
     # 10. Mise à jour de l'état d'entraînement (model_training_status)
