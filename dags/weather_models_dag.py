@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
 """
 ===============================================================================
-    mai26_continu_mlops / projet Weather : Predict next-day rain in Australia
-    ---------------------------------------------------------------------------
-    Sujet :
-        Orchestration Airflow de l'entraînement
+    Orchestration Airflow de l'entraînement
 
     Description :
         DAG qui orchestre la chaîne suivante en conteneurs Docker :
         recherche des hyperparamètres, entraînement, évaluation et promotion du modèle.
-
-    Version :
-        1.0.0
-
-    Historique :
-        2026-07-11  -  Création du module
 ===============================================================================
 """
 import os
@@ -34,9 +25,6 @@ import logging
 logger = logging.getLogger("airflow.task.models")
 
 
-# -----------------------------
-# MOUNTS DOCKER
-# -----------------------------
 mounts = [
     Mount(
         source=SETTINGS["docker"]["host_data_dir"],
@@ -61,9 +49,6 @@ mounts = [
 ]
 
 
-# -----------------------------
-# CALLBACK ERREUR
-# -----------------------------
 def log_models_failure(context):
     """
     Callback exécuté en cas d'échec d'une tâche de models.
@@ -89,9 +74,8 @@ def log_models_failure(context):
     )
 
 
-# -----------------------------
-# CONFIGURATION PAR DÉFAUT DAG
-# -----------------------------
+
+# Configuration
 default_args = {
     "owner": "weather",
     "depends_on_past": False,
@@ -101,15 +85,14 @@ default_args = {
 }
 
 
-# -----------------------------
-# DÉFINITION DU DAG
-# -----------------------------
 with DAG(
     dag_id="weather_models",
     default_args=default_args,
     description="Entrainement du model : GridSearch → Train final model → Evaluate",
     start_date=datetime(2026, 6, 1),
-    schedule=None,
+    # Réentrainement mensuel : le 1er de chaque mois à 3h du matin.
+    # catchup=False evite de rejouer les mois passés au premier demarrage.
+    schedule="0 3 1 * *",
     catchup=False,
     # Déclenchable à la fois par weather_training_trigger et manuellement
     # depuis l'UI : sans cette limite, deux runs concurrents écriraient en
@@ -123,14 +106,13 @@ with DAG(
         {
             "event": "dag_start",
             "message": "DAG weather_models initialisé",
-            "schedule": "0 * * * *",
+            "schedule": "0 3 1 * *",
         }
     )
 
-    # -----------------------------------------
-    # Etape 3.1 - Recherche des hyperparametres
-    # GridSearch avec validation croisee temporelle
-    # -----------------------------------------
+    # Recherche des hyperparametres
+    # GridSearch avec validation croisée temporelle
+
     grid_search = DockerOperator(
         task_id="grid_search",
         image=SETTINGS["docker"]["models_image"],
@@ -161,7 +143,7 @@ with DAG(
         mount_tmp_dir=False,
         do_xcom_push=True,
     )
-    
+
     logger.info(
         {
             "event": "task_registered",
@@ -169,11 +151,9 @@ with DAG(
             "message": "Etape 1/4 terminée."
         }
     )
-    
-    # -----------------------------------------
-    # Etape 3.2 - Entrainement du modele final
-    # Entraine le pipeline avec les meilleurs hyperparametres
-    # -----------------------------------------
+
+    # Entrainement du modèle final
+    # Entraine le pipeline avec les meilleurs hyperparamètres
     train_model = DockerOperator(
         task_id="train_model",
         image=SETTINGS["docker"]["models_image"],
@@ -216,12 +196,10 @@ with DAG(
             "message": "Etape 2/4 terminée."
         }
     )
-    
-    # -----------------------------------------
-    # Etape 3.3 - Evaluation du modele
-    # Calcule les metriques sur le jeu de test et enregistre le modele dans MLflow
+
+    # Evaluation du modele
+    # Calcule les métriques sur le jeu de test et enregistre le modèle dans MLflow
     # Les variables MLflow permettent la connexion au serveur DagsHub
-    # -----------------------------------------
     evaluate_model = DockerOperator(
         task_id="evaluate_model",
         image=SETTINGS["docker"]["models_image"],
@@ -261,11 +239,12 @@ with DAG(
             "message": "Etape 3/4 terminée."
         }
     )
-    
+
     # -----------------------------------------
-    # Etape 3.4 - Promotion du modele
-    # Compare le F1 du nouveau modele a celui en production.
-    # Le nouveau modele n'est promu que s'il est meilleur.
+    # Mise en production du modèle
+    # Compare le F1 du nouveau modèle à celui en production, les deux étant
+    # reévalues sur le meme jeu de test.
+    # Le nouveau modèle n'est promu que s'il est meilleur.
     # -----------------------------------------
     promotion_model = DockerOperator(
         task_id="promote_model",
@@ -291,20 +270,22 @@ with DAG(
             # du DAG, d'où les valeurs par défaut.
             "TRAINING_REASON": "{{ (dag_run.conf or {}).get('training_reason', 'manual') }}",
             "TRAINING_ROW_COUNT": "{{ (dag_run.conf or {}).get('current_row_count', 0) }}",
+            # Seuil minimal de F1. En dessous, la tache echoue pour alerter.
+            "F1_ALERT_THRESHOLD": "{{ var.value.F1_ALERT_THRESHOLD }}",
             "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
             "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
             "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
             "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
-            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"], 
+            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"],
             "WEATHER_HOST_METRICS_DIR":os.environ["WEATHER_HOST_METRICS_DIR"],
         },
-        docker_url="unix://var/run/docker.sock",
+        docker_url="unix:///var/run/docker.sock",
         network_mode="weather",
         auto_remove="force",
         mount_tmp_dir=False,
         do_xcom_push=True,
     )
-    
+
     logger.info(
         {
             "event": "task_registered",
@@ -312,9 +293,8 @@ with DAG(
             "message": "Etape 4/4 terminée."
         }
     )
-    
+
     # -----------------------------------------
     # Orchestration
     # -----------------------------------------
     grid_search >> train_model >> evaluate_model >> promotion_model
-

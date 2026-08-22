@@ -18,6 +18,9 @@ Responsabilités :
     - Promouvoir le nouveau modèle (réassigner l'alias) uniquement si
       l'amélioration minimale définie dans params.yaml est atteinte
     - Conserver le champion actuel dans le cas contraire
+    - Alerter (échec de la tâche) si le F1 du modèle réellement déployé
+      tombe sous un seuil absolu (F1_ALERT_THRESHOLD), indépendamment
+      de la métrique utilisée pour décider de la promotion
 
 Règle de promotion :
     nouveau_score - score_champion >= min_score_improvement
@@ -32,6 +35,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import joblib
 import mlflow
 import yaml
 
@@ -71,6 +75,10 @@ CANDIDATE_MODEL_PATH = (
 SERVING_MODEL_PATH = (
     Path(SETTINGS["paths"]["models"]) / SETTINGS["models"]["model"]
 )
+
+# Seuil minimal de F1 attendu pour le modèle réellement déployé.
+# Vérifié indépendamment de primary_metric (filet de sécurité en valeur absolue).
+F1_ALERT_THRESHOLD = float(os.environ.get("F1_ALERT_THRESHOLD", "0.55"))
 
 
 # =============================================================================
@@ -260,6 +268,49 @@ def load_local_score(metric_name: str) -> float | None:
         )
 
     return None
+
+
+# =============================================================================
+# ALERTE F1 (filet de sécurité)
+# =============================================================================
+def alert_if_below_f1_threshold(
+    client: MlflowClient,
+    version,
+    context: str,
+) -> None:
+    """
+    Alerte (et fait échouer la tâche Airflow) si le F1 du modèle réellement
+    déployé tombe sous F1_ALERT_THRESHOLD, indépendamment de la métrique
+    utilisée pour décider de la promotion (primary_metric).
+    """
+
+    try:
+        f1 = metric_of(client=client, version=version, metric_name="f1")
+    except Exception as error:
+        logger.warning(
+            {
+                "event": "f1_alert_check_failed",
+                "version": str(version.version),
+                "error": str(error),
+            }
+        )
+        return
+
+    if f1 < F1_ALERT_THRESHOLD:
+        logger.error(
+            {
+                "event": "f1_sous_seuil",
+                "f1": f1,
+                "seuil": F1_ALERT_THRESHOLD,
+                "contexte": context,
+            }
+        )
+        print(
+            "ALERTE : F1 de {:.4f} sous le seuil minimal de {:.4f} ({})".format(
+                f1, F1_ALERT_THRESHOLD, context
+            )
+        )
+        sys.exit(1)
 
 
 # =============================================================================
@@ -767,6 +818,17 @@ def main() -> None:
         print(f"Raison        : {reason}")
         print("Le modèle champion actuel reste inchangé")
         print("========================================")
+
+    # =========================================================================
+    # 9bis. Alerte F1 (filet de sécurité, indépendant de primary_metric)
+    # =========================================================================
+    deployed_for_alert = new if promote else champion
+    if deployed_for_alert is not None:
+        alert_if_below_f1_threshold(
+            client=client,
+            version=deployed_for_alert,
+            context="nouveau modele promu" if promote else "modele champion conserve",
+        )
 
     # =========================================================================
     # 10. Mise à jour de l'état d'entraînement (model_training_status)

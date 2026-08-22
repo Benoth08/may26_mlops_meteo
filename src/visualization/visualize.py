@@ -18,7 +18,7 @@ logger = get_logger("visualize_model")
 DATA_DIR = Path(SETTINGS["paths"]["processed"])
 FIGURES_DIR = Path(SETTINGS["paths"]["figures"])
 
-PREPROCESSED_DATA_PATH = (PROCESSED_DIR / SETTINGS["models"]["preprocessed_data"])
+PREPROCESSED_DATA_PATH = (DATA_DIR / SETTINGS["models"]["preprocessed_data"])
 
 
 # ── Palette & style global ───────────────────────────────────────────────────
@@ -35,7 +35,7 @@ MOIS_FR = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun",
 def load_data(path: str) -> pd.DataFrame:
     """Charge le CSV météo, parse la colonne 'date' et trie chronologiquement."""
     
-    if path is None or :
+    if path is None:
         path = PREPROCESSED_DATA_PATH
        
     df = pd.read_csv(path, parse_dates=["date"])
