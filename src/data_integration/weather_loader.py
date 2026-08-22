@@ -249,7 +249,7 @@ class WeatherDataLoader:
                 self.logger.error({
                     "event": "archive_path_invalid",
                     "message": "Le chemin d'archive est vide ou nul",
-                    "source_file": str(src_path),
+                    "source_file": str(csv_path),
                     "run_id": self.run_id
                 })
 

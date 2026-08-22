@@ -12,7 +12,7 @@ from core.logger import get_logger
 
 from auth import check_auth
 from constants import API_VERSION, API_NAME, TABLE_RAW, IMPORT_DATE_COLUMN, RUNID_COLUMN, SOURCE_COLUMN
-from deps import check_model, check_database, get_engine
+from deps import check_model, check_database, get_engine, get_model
 
 logger = get_logger("api")
 

@@ -16,13 +16,14 @@
 import argparse
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
 from core.logger import get_logger
 from core.settings import SETTINGS
-from core.config import load_postgres_config
+from core.config import load_postgres_config, ConfigError
 
 from build_features import build_preprocessor, identify_feature_types
 
