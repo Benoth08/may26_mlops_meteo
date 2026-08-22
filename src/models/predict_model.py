@@ -50,7 +50,19 @@ def load_model(model_path=None):
         model_path = Path(MODEL_PATH)
         if not model_path.exists():
             model_path = Path(MODEL_PKL_PATH)
-    return joblib.load(model_path)
+    artifact = joblib.load(model_path)
+
+    # train_model.py sauvegarde un dict {"pipeline": ..., "metadata": ...}.
+    # Certains formats (ex: model.pkl) peuvent contenir directement la pipeline.
+    if isinstance(artifact, dict):
+        if "pipeline" not in artifact:
+            raise KeyError(
+                "Le fichier modèle est un dictionnaire mais "
+                "ne contient pas la clé 'pipeline'."
+            )
+        return artifact["pipeline"]
+
+    return artifact
 
 
 def featurize(df_raw):

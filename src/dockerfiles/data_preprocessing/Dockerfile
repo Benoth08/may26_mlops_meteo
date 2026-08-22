@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir \
 COPY src/core/ /app/data_preprocessing/core/
 COPY src/features/ /app/data_preprocessing/
 COPY src/data_preprocessing /app/data_preprocessing/
+COPY params.yml /app/data_preprocessing/params.yml
 COPY data/ /data/
 
 # Entrypoint par défaut

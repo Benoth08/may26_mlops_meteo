@@ -38,6 +38,12 @@ start: check-env
 	$(DOCKER_COMPOSE) up -d
 	@echo "Services démarrés."
 
+## Démarrage + suivi des logs en direct (Ctrl+C n'arrête pas les services)
+start-logs: check-env
+	$(DOCKER_COMPOSE) up -d
+	@echo "Services démarrés. Logs en direct (Ctrl+C pour quitter, les services continuent de tourner)."
+	$(DOCKER_COMPOSE) logs -f
+
 ## Arrêt propre
 stop:
 	$(DOCKER_COMPOSE) stop
@@ -52,6 +58,13 @@ down:
 # RESET COMPLET
 # -----------------------------------------------------------------------------
 
+## Réinstalle Docker pour nettoyer tous les repertoires (layers...)
+reset-docker:
+	sudo systemctl stop docker
+	sudo rm -rf /var/lib/docker
+	sudo systemctl start docker
+
+
 ## Reset total : stop + purge volumes + purge images + rebuild + restart
 reset: check-env
 	$(DOCKER_COMPOSE) down -v --remove-orphans
@@ -59,6 +72,8 @@ reset: check-env
 	$(DOCKER_COMPOSE) build --no-cache
 	$(DOCKER_COMPOSE) up -d
 	@echo "Reset complet terminé."
+	
+	
 
 # -----------------------------------------------------------------------------
 # OUTILS
@@ -70,6 +85,19 @@ clean-logs:
 	mkdir -p logs
 	@echo "Logs nettoyés."
 
+## Nettoyage Docker
+clean-docker:
+	@echo "Nettoyage Docker..."
+	docker builder prune -af
+	docker system prune -af
+	@echo "Docker nettoyé."
+
+## Nettoyage Volume
+clean-volumes:
+	@echo "Nettoyage Volumes..."
+	docker system prune -af --volumes
+	@echo "Volumes nettoyés."
+	
 ## Rebuild uniquement Airflow
 rebuild-airflow: check-env
 	$(DOCKER_COMPOSE) build airflow-apiserver airflow-scheduler airflow-worker airflow-triggerer airflow-dag-processor
@@ -105,11 +133,14 @@ help:
 	@echo ""
 	@echo "  make install               → Verification + Build + start"
 	@echo "  make start                 → Start services"
+	@echo "  make start-logs            → Start services + suivi des logs en direct"
 	@echo "  make stop                  → Stop services"
 	@echo "  make down                  → Stop + remove containers"
 	@echo "  make reset                 → Reset complet (purge + rebuild)"
 	@echo ""
 	@echo "  make clean-logs            → Purge logs"
+	@echo "  make clean-docker          → Purge cache Docker"
+	@echo "  make clean-volumes         → Purge volumes"
 	@echo "  make rebuild-airflow       → Rebuild Airflow"
 	@echo "  make rebuild-integration   → Rebuild data-integration"
 	@echo "  make rebuild-preprocessing → Rebuild data-preprocessing"

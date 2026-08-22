@@ -29,6 +29,8 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       env:
+        AIRFLOW_CONTAINER_DATA_DIR: /opt/airflow/data
+        AIRFLOW_CONTAINER_LOGS_DIR: /opt/airflow/logs
         WEATHER_HOST_DATA_DIR: /home/ubuntu/projet_weather/data
         WEATHER_HOST_LOGS_DIR: /home/ubuntu/projet_weather/logs
         WEATHER_HOST_MODELS_DIR: /home/ubuntu/projet_weather/models

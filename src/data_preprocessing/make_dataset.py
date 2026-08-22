@@ -11,47 +11,58 @@ from core.config import load_postgres_config, ConfigError, PostgresConfig
 from build_features import prepare_data
 
 import joblib
+import pandas as pd
 from pathlib import Path
 
 logger = get_logger("make_dataset")
- 
+
+DATA_DIR = Path(SETTINGS["paths"]["data"])
 PROCESSED_DIR = Path(SETTINGS["paths"]["processed"])
 MODELS_DIR = Path(SETTINGS["paths"]["models"])
 
+RAWDATASET_INPUT_PATH = (DATA_DIR / SETTINGS["models"]["raw_dataset"])
 DATASET_OUTPUT_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
 PREPROCESSOR_OUTPUT_PATH = (MODELS_DIR / SETTINGS["models"]["preprocessor"])
 
+# Code de sortie signalant à Airflow (DockerOperator.skip_on_exit_code) qu'il
+# n'y a aucune donnée à traiter : la tâche et les tâches en aval doivent être
+# marquées "skipped", pas "failed".
+SKIP_EXIT_CODE = 99
+
 
 def main():
-    
+
     # -----------------------------
-    # 1. Lire les variables d'env
-    # ----------------------------- 
-    try:
-        cfg = load_postgres_config()
-    except ConfigError as e:
-        # On ne logue jamais les valeurs des identifiants, seulement les
-        # noms des variables manquantes (cf. config.py) : l'ancienne version
-        # affichait POSTGRES_WTH_PASSWORD en clair dès qu'une AUTRE variable
-        # (ex: POSTGRES_WTH_HOST) était absente.
-        logger.error({"event": "config_error", "error": str(e)})
+    # 1. Lire le fichier parquet
+    # -----------------------------
+    logger.info({"event": "make_dataset_start", "rawdataset": str(RAWDATASET_INPUT_PATH)})
+
+    if not RAWDATASET_INPUT_PATH.exists():
+        logger.error({"event": "Fichier non disponible", "path": str(RAWDATASET_INPUT_PATH)})
         sys.exit(1)
-        
-    connstring = cfg.sqlalchemy_uri
-    
-    logger.info({"event": "make_dataset_start", "host": cfg.host, "db": cfg.db})
-    
+
+    if pd.read_parquet(RAWDATASET_INPUT_PATH).empty:
+        logger.warning({
+            "event": "make_dataset_skipped",
+            "message": "Dataset brut vide, aucun traitement effectué.",
+            "path": str(RAWDATASET_INPUT_PATH),
+        })
+        print("⚠️  make_dataset SKIPPED (0 ligne, aucun traitement)")
+        sys.exit(SKIP_EXIT_CODE)
+
     try:
         data = prepare_data(
-            source="postgres",
-            connection_uri=connstring,
-            table_name=SETTINGS["postgres"]["table_raw"],
+            source="parquet",
+            data_path=str(RAWDATASET_INPUT_PATH),
             save_report=True,
         )
     except Exception as e:
         logger.error({"event": "prepare_data_failed", "error": str(e)}, exc_info=True)
         sys.exit(1)
 
+    # -
+    # 2. Enregistrement des données 
+    # -
     DATASET_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     PREPROCESSOR_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 

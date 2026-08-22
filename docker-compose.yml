@@ -6,8 +6,8 @@
 x-airflow-common:
   &airflow-common
   build:
-    context: ./src/dockerfiles/airflow
-    dockerfile: ./Dockerfile
+    context: .
+    dockerfile: ./src/dockerfiles/airflow/Dockerfile
   restart: always
   env_file:
     - .env
@@ -21,14 +21,13 @@ x-airflow-common:
     NUMEXPR_NUM_THREADS: 1
 
     # LIMITER LA CHARGE AIRFLOW
-    AIRFLOW__CORE__PARALLELISM: 2
-    AIRFLOW__CORE__DAG_CONCURRENCY: 2
-    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 2
+    AIRFLOW__CORE__PARALLELISM: 3
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 3
 
     # SCHEDULER
     AIRFLOW__SCHEDULER__MAX_THREADS: 2
     AIRFLOW__SCHEDULER__PARSING_PROCESSES: 1
-    AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC: 10
+    AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC: 5
     AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: 30
     AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: 10
   
@@ -36,7 +35,7 @@ x-airflow-common:
     AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: 60
 
     # CELERY
-    AIRFLOW__CELERY__WORKER_CONCURRENCY: 1
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: 3
     AIRFLOW__CELERY__WORKER_PREFETCH_MULTIPLIER: 1
     AIRFLOW__CELERY__TASK_ACKS_LATE: "true"
     AIRFLOW__CELERY__RETRY_DELAY: 60    
@@ -67,8 +66,7 @@ x-airflow-common:
     AIRFLOW__API__AUTH_BACKENDS: airflow.api_fastapi.auth.backend.jwt_auth
 
     # UI / BASE URL
-    AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
-    AIRFLOW__API__BASE_URL: http://localhost:8080                                             
+    AIRFLOW__API__BASE_URL: http://localhost:8080
 
     # MISC
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -82,8 +80,8 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./plugins:/opt/airflow/plugins
     - ./logs:/opt/airflow/logs
-    - ./src/data:/data
     - ./config:/opt/airflow/config
+    - ./data:/opt/airflow/data
     - /var/run/docker.sock:/var/run/docker.sock
   user: "${AIRFLOW_UID:-50000}:0"
   group_add:
@@ -148,15 +146,15 @@ services:
     <<: *airflow-common
     container_name: airflow-apiserver
     command: api-server
-    mem_limit: 2g
+    mem_limit: 1.5g
     cpus: 1.0
     environment:
       <<: *airflow-common-env
       AIRFLOW__API__MAX_PAGE_LIMIT: 100
       AIRFLOW__API__ENABLE_EXPERIMENTAL_API: 'false'
-      AIRFLOW__WEBSERVER__WORKERS: 2
-      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 120
-      AIRFLOW__WEBSERVER__WEB_SERVER_PORT: 8080  
+      AIRFLOW__API__WORKERS: 2
+      AIRFLOW__API__WORKER_TIMEOUT: 120
+      AIRFLOW__API__PORT: 8080
       FLASK_LIMITER_STORAGE_URI: redis://redis:6379/1
     ports:
       - "8080:8080"
@@ -178,6 +176,8 @@ services:
     <<: *airflow-common
     container_name: airflow-scheduler
     command: scheduler
+    mem_limit: 1g
+    cpus: 1.0
     networks:
       - weather
     healthcheck:
@@ -195,6 +195,8 @@ services:
   airflow-dag-processor:
     <<: *airflow-common
     command: dag-processor
+    mem_limit: 768m
+    cpus: 0.5
     networks:
       - weather
     healthcheck:
@@ -212,6 +214,8 @@ services:
   airflow-worker:
     <<: *airflow-common
     command: celery worker
+    mem_limit: 2g
+    cpus: 1.5
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=0
     networks:
@@ -239,6 +243,8 @@ services:
   airflow-triggerer:
     <<: *airflow-common
     command: triggerer
+    mem_limit: 512m
+    cpus: 0.5
     networks:
       - weather
     healthcheck:
@@ -312,8 +318,13 @@ services:
         echo
         mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
         echo
+        echo        
         echo "Airflow version:"
         /entrypoint airflow version
+        echo
+        echo "Migrating Airflow database..."
+        /entrypoint airflow db migrate
+        echo "Database migration completed."
         echo
         echo "Files in shared volumes:"
         echo
@@ -355,23 +366,22 @@ services:
         echo
         chown -R "${AIRFLOW_UID}:0" /opt/airflow/
         echo
-        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
-        echo
-        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
-        echo
-        echo "Files in shared volumes:"
-        echo
+        echo "Création utilisateur admin..."
+        /entrypoint airflow users create \
+        --username "${_AIRFLOW_WWW_USER_USERNAME}" \
+        --password "${_AIRFLOW_WWW_USER_PASSWORD}" \
+        --firstname Airflow \
+        --lastname Admin \
+        --role Admin \
+        --email airflow@example.com || echo "User already exists or creation failed"
         ls -la /opt/airflow/{logs,dags,plugins,config}
 
     # yamllint enable rule:line-length
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
     user: "0:0"
-
+    
   airflow-cli:
     <<: *airflow-common
     profiles:
@@ -452,7 +462,7 @@ services:
     ports:
       - "8057:8057"
     volumes:
-      - ./src/data:/data
+      - ./data:/data
       - ./models:/models
       - ./logs:/logs
     healthcheck:
@@ -464,7 +474,7 @@ services:
       
   # Container : data-integration
   data-integration:
-    image: data-integration:latest
+    image: data-integration:${WEATHER_INTEGRATION_IMAGE_TAG}
     build:
       context: .
       dockerfile: ./src/dockerfiles/data_integration/Dockerfile
@@ -487,22 +497,12 @@ services:
     networks:
       - weather
     volumes:
-      - ./src/data:/data
+      - /data:/data
       - ./logs:/logs
-
-   
-  # Containers data-validation
-  # Containers data-preparation
-  # Containers model-trainig
-  # Containers model-evaluation
-  # Containers model-validation 
-  # ...
-  # ...
-  # ...
 
   # Container : data-preprocessing
   data-preprocessing:
-    image: data-preprocessing:latest
+    image: data-preprocessing:${WEATHER_PREPROCESSING_IMAGE_TAG}
     build:
       context: .
       dockerfile: ./src/dockerfiles/data_preprocessing/Dockerfile
@@ -527,14 +527,14 @@ services:
     networks:
       - weather
     volumes:
-      - ./src/data:/data
+      - /data:/data
       - ./models:/models
       - ./logs:/logs
   
   
   # Container : model-training / model-evaluation
   models:
-    image: models:latest
+    image: models:${WEATHER_MODELS_IMAGE_TAG}
     build:
       context: .
       dockerfile: ./src/dockerfiles/models/Dockerfile
@@ -552,7 +552,7 @@ services:
     networks:
       - weather
     volumes:
-      - ./src/data:/data
+      - /data:/data
       - ./models:/models
       - ./metrics:/metrics
       - ./logs:/logs                                

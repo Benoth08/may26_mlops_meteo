@@ -14,6 +14,8 @@
 ===============================================================================
 """
 
+import os
+
 from pathlib import Path
 
 
@@ -22,13 +24,12 @@ from pathlib import Path
 # ============================================================================
 PROJECT_NAME = "WeatherAUS"
 VERSION = "1.0.0"
-RANDOM_SEED = 42
 
 API_VERSION = "1.0.0"
 API_NAME = "weather-api"
 
 # ============================================================================
-# Logging, Debud...
+# Logging, Debug...
 # ============================================================================
 LOGGING_LEVEL = "INFO"
 
@@ -126,28 +127,6 @@ COMPASS_DEGREES = {
     ])
 }
 
-
-# ============================================================================
-# Paramètres de preprocessing
-# ============================================================================
-HIGH_MISSING_THRESHOLD = 0.30
-
-IMPUTATION_STRATEGY = {
-    "numeric": "iterative",
-    "categorical": "mode",
-    "location": "target_encoder",
-}
-
-SCALER = "robust"  # robust / standard / minmax
-
-
-# ============================================================================
-# Paramètres de split
-# ============================================================================
-SPLIT_STRATEGY = "temporal"
-TEST_SIZE = 0.20
-
-
 # ============================================================================
 # Paramètres d’exécution ML (threads)
 # ============================================================================
@@ -174,26 +153,35 @@ CSV_CHUNK_SIZE = 5000
 SQL_BATCH_SIZE = 500
 
 # ============================================================================
-# Dossiers du projet
+# Dossiers du projet (vu interne docker)
 # ============================================================================
 DATA_DIR = Path("/data")
-RAW_DIR = DATA_DIR / "raw"
-PROCESSED_DIR = DATA_DIR / "processed"
-ARCHIVE_DIR = DATA_DIR / "archive"
+DATA_INCOMING_FLD = "incoming"
+DATA_RAW_FLD = "raw"
+DATA_PROCESSED_FLD = "processed"
+DATA_ARCHIVE_FLD = "archive"
+DATA_QUARANTINE_FLD ="quarantine"
+
+INCOMING_DIR = DATA_DIR / DATA_INCOMING_FLD
+RAW_DIR = DATA_DIR / DATA_RAW_FLD
+PROCESSED_DIR = DATA_DIR / DATA_PROCESSED_FLD
+ARCHIVE_DIR = DATA_DIR / DATA_ARCHIVE_FLD
+
 MODELS_DIR = Path("/models")
 REPORTS_DIR = Path("reports")
 FIGURES_DIR = REPORTS_DIR / "figures"
 METRICS_DIR = Path("/metrics")
-LOGS_DIR = Path("logs")
-
+LOGS_DIR = Path("/logs")
 
 # ============================================================================
-# Modele
+# Artefacts Modele
 # ============================================================================
 MODEL_NAME = "model.joblib"
+CANDIDATE_MODEL_NAME = "candidate_model.joblib"
 MODEL_PKL_NAME = "model.pkl"
 REGISTERED_MODEL_NAME = "weather-rain-model"
 RAW_DATA = "weatherAUS.csv"
+RAW_DATASET = "weather.parquet"
 PREPROCESSED_DATA = "weather_data_clean.csv"
 DATASET_NAME = "dataset.joblib"
 METRICS_NAME = "scores.json"
@@ -209,7 +197,8 @@ REPORTS_NAME = "missing_values_report.csv"
 SETTINGS = {
     "project": PROJECT_NAME,
     "version": VERSION,
-    "seed": RANDOM_SEED,
+    
+    "seed": 42,           
     
     "api": {
         "version": API_VERSION,
@@ -235,13 +224,6 @@ SETTINGS = {
 
     "wind_columns": WIND_DIRECTION_COLUMNS,
     "compass_degrees": COMPASS_DEGREES,
-
-    "missing_threshold": HIGH_MISSING_THRESHOLD,
-    "imputation": IMPUTATION_STRATEGY,
-    "scaler": SCALER,
-
-    "split_strategy": SPLIT_STRATEGY,
-    "test_size": TEST_SIZE,
 
     "threads": {
         "OMP_NUM_THREADS": OMP_NUM_THREADS,
@@ -271,8 +253,14 @@ SETTINGS = {
         "csv_chunk_size": CSV_CHUNK_SIZE,
         "sql_batch_size": SQL_BATCH_SIZE
     },
+    "incoming": {
+        "batch_size": 500,
+        "delay": 10,
+        "separator": ","
+    },
 
     "paths": {
+        "incoming": INCOMING_DIR,
         "data": RAW_DIR,
         "processed": PROCESSED_DIR,
         "archive": ARCHIVE_DIR,
@@ -283,18 +271,42 @@ SETTINGS = {
         "logs": LOGS_DIR,
     },
     
+    "docker": {
+        "host_data_dir": os.environ["WEATHER_HOST_DATA_DIR"], # vu par le daemon Docker hôte
+        "host_logs_dir": os.environ["WEATHER_HOST_LOGS_DIR"],
+        "host_models_dir": os.environ["WEATHER_HOST_MODELS_DIR"],
+        "host_metrics_dir": os.environ["WEATHER_HOST_METRICS_DIR"],
+        "container_data_target": "/data", # cible dans le conteneur d'intégration, peut rester en dur
+        "container_logs_target": "/logs",
+        "container_models_target": "/models",
+        "container_metrics_target": "/metrics",
+        "airflow_data_dir": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+        "airflow_logs_dir": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+        "folder_data_incoming": DATA_INCOMING_FLD,
+        "folder_data_raw": DATA_RAW_FLD,
+        "folder_data_processed": DATA_PROCESSED_FLD,
+        "folder_data_archive": DATA_ARCHIVE_FLD,
+        "folder_data_quarantine" : DATA_QUARANTINE_FLD,
+        "network": "weather", 
+        "data-integration_image": f"data-integration:{os.environ.get('WEATHER_INTEGRATION_IMAGE_TAG', 'latest')}",
+        "data-preprocessing_image":  f"data-preprocessing:{os.environ.get('WEATHER_PREPROCESSING_IMAGE_TAG', 'latest')}",
+        "models_image":  f"models:{os.environ.get('WEATHER_MODELS_IMAGE_TAG', 'latest')}"
+    },
+    
     "models": {
         "model" :MODEL_NAME,
+        "candidate_model": CANDIDATE_MODEL_NAME,
         "model_pkl": MODEL_PKL_NAME,
         "registered_model_name": REGISTERED_MODEL_NAME,
         "rawdata": RAW_DATA,
+        "raw_dataset" : RAW_DATASET,
         "preprocessed_data": PREPROCESSED_DATA,
         "dataset": DATASET_NAME,
         "preprocessor": PREPROCESSOR_NAME,
         "best_params": BEST_PARAMS_NAME,
         "reports": REPORTS_NAME,
         "metrics": METRICS_NAME,
-        "predictions": PREDICTIONS_NAME,
-    }
+        "predictions": PREDICTIONS_NAME
+    },
     
 }

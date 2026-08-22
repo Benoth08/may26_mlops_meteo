@@ -22,7 +22,9 @@ RUN pip install --no-cache-dir \
 
 # Code métier
 COPY src/core/ /app/models/core/
+COPY src/features/build_features.py /app/models/build_features.py
 COPY src/models/ /app/models/
+COPY params.yml /app/models/params.yml
 
 # Entrypoint par défaut
 CMD ["bash"]

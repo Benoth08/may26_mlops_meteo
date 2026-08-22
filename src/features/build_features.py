@@ -51,7 +51,9 @@ from typing import Dict, List, Optional, Tuple
 from core.config import load_postgres_config
 from core.logger import get_logger
 from core.settings import SETTINGS
+from core.params import load_params
 from core.metadata import COLUMN_CONSTRAINTS, REQUIRED_COLUMNS, TECHNICAL_COLUMNS, NON_TECHNICAL_COLUMNS, FEATURE_COLUMNS, WIND_DIRECTION_COLUMNS, NUMERIC_COLUMNS, CATEGORICAL_COLUMNS, get_all_columns, normalize_column_name, normalize_data
+from export_dataset import extract_dataset as load_dataset
 
 
 # Les variables de threads doivent être posées AVANT l'import de numpy /
@@ -64,7 +66,8 @@ import pandas as pd
 
 logger = get_logger("build_features")
 
-
+PARAMS = load_params()
+ 
 # ============================================================
 # Constantes
 # ------------------------------------------------------------
@@ -77,8 +80,10 @@ logger = get_logger("build_features")
 TARGET = SETTINGS["target"]["column_norm"]
 LOCATION = SETTINGS["location"]["column_norm"]
  
-HIGH_MISSING_THRESHOLD = SETTINGS["missing_threshold"]
-SPLIT_STRATEGY = SETTINGS["split_strategy"]
+HIGH_MISSING_THRESHOLD = PARAMS["preprocessing"]["missing_threshold"]
+SPLIT_STRATEGY = PARAMS["split"]["strategy"]
+SPLIT_TEST_SIZE = PARAMS["split"]["test_size"]
+SPLIT_RANDOM_STATE = PARAMS["split"]["random_state"]
 
 # Degrés pour chaque direction cardinale, N = 0°, sens horaire.
 COMPASS_DEGREES: Dict[str, float] = SETTINGS["compass_degrees"]
@@ -97,250 +102,7 @@ CLEAN_DATE_COL = SETTINGS["postgres"]["cleandate_column_norm"]
 RUNID_COL = SETTINGS["postgres"]["cleanrunid_column_norm"]
 SOURCE_COL = SETTINGS["postgres"]["cleansource_column_norm"]
 
-
-
-
-
-# ============================================================
-# Chargement des données
-# ============================================================
-
-def load_data_from_csv(data_path: str) -> pd.DataFrame:
-    """
-    Charge le dataset depuis un fichier CSV.
-
-    Parameters
-    ----------
-    data_path : str
-        Chemin vers le fichier CSV.
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    path = Path(data_path)
-
-    if not path.exists():
-        raise FileNotFoundError(f"Fichier introuvable : {data_path}")
-
-    logger.info("Chargement CSV depuis %s", data_path)
-    
-    df = pd.read_csv(path)
-
-    # Normalisation des noms de colonne
-    return normalize_data(df)
-
-
-def load_data_from_postgres(connection_uri: str, table_name: str) -> pd.DataFrame:
-    """
-    Charge le dataset depuis une table PostgreSQL via SQLAlchemy.
-    """
-
-    try:
-        from sqlalchemy import create_engine, inspect, text
-    except ImportError as exc:
-        raise ImportError(
-            "sqlalchemy est requis pour charger depuis PostgreSQL. "
-            "Installez-le avec : pip install sqlalchemy psycopg2-binary"
-        ) from exc
-
-    logger.info(
-        "Connexion PostgreSQL, lecture de la table '%s'",
-        table_name
-    )
-
-    engine = create_engine(connection_uri)
-
-    inspector = inspect(engine)
-
-    if "." in table_name:
-        schema, table = table_name.split(".")
-    else:
-        schema = None
-        table = table_name
-
-    if not inspector.has_table(table, schema=schema):
-        raise ValueError(
-            f"Table inexistante : {table_name}"
-        )
-
-    columns = ", ".join(NON_TECHNICAL_COLUMNS)
-
-    query = text(
-        f"""
-        SELECT {columns}
-        FROM {table_name}
-        WHERE {IMPORT_DATE_COL} = (
-            SELECT MAX({IMPORT_DATE_COL})
-            FROM {table_name}
-        )
-        """
-    )
-
-    logger.info("Requête PostgreSQL : '%s'", query)
-
-    df = pd.read_sql(query, engine)
-
-
-    # ==========================================================
-    # Normalisation des valeurs manquantes
-    # ==========================================================
-
-    logger.info({
-        "event": "postgres_before_na_cleaning",
-        "rain_tomorrow_values": (
-            df["rain_tomorrow"]
-            .value_counts(dropna=False)
-            .to_dict()
-            if "rain_tomorrow" in df.columns
-            else None
-        )
-    })
-
-
-    # Nettoyage uniquement des colonnes texte
-    object_columns = df.select_dtypes(
-        include=["object", "string"]
-    ).columns
-
-    for col in object_columns:
-        df[col] = (
-            df[col]
-            .astype("string")
-            .str.strip()
-            .replace(POSTGRES_NA_VALUES, pd.NA)
-        )
-
-        # Conversion pandas NA -> numpy NaN.
-        # NB : `df.replace({pd.NA: np.nan})` ne fonctionne PAS de façon
-        # fiable (pd.NA a une sémantique d'égalité spéciale : pd.NA == pd.NA
-        # ne vaut pas True, donc .replace() ne le reconnaît pas comme une
-        # valeur à remplacer). On repasse la colonne en dtype "object" et on
-        # utilise .where()/.notna(), qui gèrent pd.NA correctement.
-        df[col] = df[col].astype(object).where(df[col].notna(), np.nan)                                                                      
-
-
-    logger.info({
-        "event": "postgres_after_na_cleaning",
-        "rain_tomorrow_values": (
-            df["rain_tomorrow"]
-            .value_counts(dropna=False)
-            .to_dict()
-            if "rain_tomorrow" in df.columns
-            else None
-        )
-    })
-
-
-    # Normalisation des noms de colonne
-    df = normalize_data(df)
-
-
-    return df
-
-def load_data_from_api(api_url: str) -> pd.DataFrame:
-    """
-    Charge le dataset depuis un endpoint REST retournant du JSON.
-
-    Deux formats de réponse supportés :
-    - Liste JSON directe  : [{...}, {...}]
-    - Objet avec clé data : {"data": [{...}, {...}], ...}
-
-    Parameters
-    ----------
-    api_url : str
-        URL complète de l'endpoint (ex. http://localhost:8057/meteo).
-
-    Returns
-    -------
-    pd.DataFrame
-
-    Notes
-    -----
-    Dépendance requise : requests.
-    """
-    try:
-        import requests
-    except ImportError as exc:
-        raise ImportError(
-            "requests est requis pour charger depuis l'API. "
-            "Installez-le avec : pip install requests"
-        ) from exc
-
-    logger.info("Requête API : %s", api_url)
-    response = requests.get(api_url, timeout=30)
-    response.raise_for_status()
-
-    payload = response.json()
-
-    if isinstance(payload, list):
-        df = pd.DataFrame(payload)
-    elif isinstance(payload, dict) and "data" in payload:
-        df = pd.DataFrame(payload["data"])
-    else:
-        df = pd.DataFrame(payload)
-
-    # Normalisation des noms de colonne
-    return normalize_data(df)
-
-
-def load_dataset(
-    source: str = "csv",
-    data_path: Optional[str] = None,
-    connection_uri: Optional[str] = None,
-    table_name: Optional[str] = None,
-    api_url: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Charge le dataset depuis la source spécifiée.
-
-    Par défaut, utilise le CSV local pour préserver la compatibilité existante.
-
-    Parameters
-    ----------
-    source : {"csv", "postgres", "api"}
-        Source de données. Par défaut : "csv".
-    data_path : str, optional
-        Chemin CSV. Requis si source="csv".
-    connection_uri : str, optional
-        URI SQLAlchemy. Requis si source="postgres".
-    table_name : str, optional
-        Nom de la table PostgreSQL. Requis si source="postgres".
-    api_url : str, optional
-        URL de l'endpoint REST. Requis si source="api".
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    
-    logger.info({
-        "event": "loading data",
-        "source": source
-    })
-        
-    if source == "csv":
-        if not data_path:
-            raise ValueError("source='csv' requiert data_path.")
-        return load_data_from_csv(data_path)
-
-    if source == "postgres":
-        if not connection_uri or not table_name:
-            raise ValueError(
-                "source='postgres' requiert connection_uri et table_name."
-            )
-        return load_data_from_postgres(connection_uri, table_name)
-
-    if source == "api":
-        if not api_url:
-            raise ValueError("source='api' requiert api_url.")
-        return load_data_from_api(api_url)
-
-    raise ValueError(
-        f"Source inconnue : '{source}'. Valeurs acceptées : csv, postgres, api."
-    )
-
-    
+  
 # ============================================================
 # Validation du schéma
 # ============================================================
@@ -412,7 +174,9 @@ def convert_types(df: pd.DataFrame) -> pd.DataFrame:
 
         # --- Conversion datetime ---
         elif col_type == "datetime":
-            df[col_norm] = pd.to_datetime(df[col_norm], errors="coerce")
+            # Format source DD/MM/YYYY (WeatherAUS) : dayfirst=True est requis,
+            # sinon tout jour > 12 échoue au parsing et devient NaT.
+            df[col_norm] = pd.to_datetime(df[col_norm], errors="coerce", dayfirst=True)
 
         # --- Conversion string ---
         elif col_type == "string":
@@ -588,12 +352,12 @@ def save_prepared_data(
             if engine:
                 engine.dispose()
                 
-    elif source == "api":
+    elif source in ("api", "parquet"):
         ### meme stockage que csv
         save_clean_data_to_csv(df_to_insert)
     else:
         raise ValueError(
-            f"Source inconnue : '{source}'. Valeurs acceptées : csv, postgres, api."
+            f"Source inconnue : '{source}'. Valeurs acceptées : csv, parquet, postgres, api."
         )  
     
     logger.info({"event": "save_completed", "destination": source, "rows": len(df_to_insert), "run_id": run_id})
@@ -1164,7 +928,7 @@ def build_preprocessor(
                 "imputer",
                 IterativeImputer(
                     max_iter=10,
-                    random_state=42,
+                    random_state=SPLIT_RANDOM_STATE,
                     add_indicator=True,
                 ),
             ),
@@ -1281,8 +1045,8 @@ def split_train_test(
     X: pd.DataFrame,
     y: pd.Series,
     df_for_sort: Optional[pd.DataFrame] = None,
-    test_size: float = 0.2,
-    random_state: int = 42,
+    test_size: float = SPLIT_TEST_SIZE,
+    random_state: int = SPLIT_RANDOM_STATE,
     split_strategy: str = SPLIT_STRATEGY,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
@@ -1340,8 +1104,8 @@ def split_train_test(
 
 def prepare_data(
     data_path: Optional[str] = None,
-    test_size: float = 0.2,
-    random_state: int = 42,
+    test_size: float = SPLIT_TEST_SIZE,
+    random_state: int = SPLIT_RANDOM_STATE,
     split_strategy: str = SPLIT_STRATEGY,
     missing_threshold: float = HIGH_MISSING_THRESHOLD,
     drop_high_missing: bool = False,
@@ -1354,7 +1118,7 @@ def prepare_data(
     """
     Prépare les données pour la modélisation.
 
-    Supporte trois sources : CSV (défaut, rétrocompatible), PostgreSQL, API REST.
+    Supporte quatre sources : CSV (défaut, rétrocompatible), Parquet, PostgreSQL, API REST.
 
     Par défaut :
     - les colonnes avec plus de 30 % de valeurs manquantes sont conservées ;
@@ -1369,7 +1133,7 @@ def prepare_data(
     ----------
     data_path : str, optional
         Chemin CSV. Utilisé si source="csv".
-    source : {"csv", "postgres", "api"}
+    source : {"csv", "parquet", "postgres", "api"}
         Source de données. Par défaut : "csv".
     connection_uri : str, optional
         URI SQLAlchemy. Requis si source="postgres".
@@ -1610,8 +1374,8 @@ def parse_arguments() -> argparse.Namespace:
         "--source",
         type=str,
         default="csv",
-        choices=["csv", "postgres", "api"],
-        help="Source de données : csv (défaut), postgres ou api.",
+        choices=["csv", "parquet", "postgres", "api"],
+        help="Source de données : csv (défaut), parquet, postgres ou api.",
     )
 
     parser.add_argument(
@@ -1653,14 +1417,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--test-size",
         type=float,
-        default=0.2,
+        default=SPLIT_TEST_SIZE,
         help="Proportion du jeu de test.",
     )
 
     parser.add_argument(
         "--random-state",
         type=int,
-        default=42,
+        default=SPLIT_RANDOM_STATE,
         help="Graine de reproductibilité.",
     )
 
