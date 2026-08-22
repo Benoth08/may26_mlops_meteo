@@ -2,11 +2,19 @@
 Constantes de l'API — dérivées de settings.SETTINGS
 """
 from core.settings import SETTINGS
+from core.params import load_params
 from core.metadata import COLUMN_CONSTRAINTS, REQUIRED_COLUMNS, TECHNICAL_COLUMNS, WIND_DIRECTION_COLUMNS, CATEGORICAL_COLUMNS, ALLOWED_FEATURES, FEATURE_COLUMNS, NUMERIC_COLUMNS, DB_COLUMNS, normalize_column_name, normalize_data
 
 from typing import Dict
 
 
+PARAMS = load_params()
+SOURCE = PARAMS["dataset"]["source"]
+CSV_PATH = PARAMS["csv"]["path"]
+POSTGRES_TABLE = PARAMS["postgres"]["table"]
+API_URL = PARAMS["api"]["url"]
+    
+    
 API_VERSION = SETTINGS["api"]["version"]
 API_NAME = SETTINGS["api"]["name"]
 
@@ -27,8 +35,8 @@ MAX_BATCH_ROWS = SETTINGS["api_protection"]["max_batch_rows"]
 TARGET = SETTINGS["target"]["column_norm"]
 LOCATION = SETTINGS["location"]["column_norm"]
  
-HIGH_MISSING_THRESHOLD = SETTINGS["missing_threshold"]
-SPLIT_STRATEGY = SETTINGS["split_strategy"]
+HIGH_MISSING_THRESHOLD = PARAMS["preprocessing"]["missing_threshold"]
+SPLIT_STRATEGY = PARAMS["split"]["strategy"]
 
 # Degrés pour chaque direction cardinale, N = 0°, sens horaire.
 COMPASS_DEGREES: Dict[str, float] = SETTINGS["compass_degrees"]

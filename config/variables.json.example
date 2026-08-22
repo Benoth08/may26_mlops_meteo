@@ -1,10 +1,13 @@
 {
-  "POSTGRES_WTH_DB": "weather",
-  "POSTGRES_WTH_USER": "weather",
-  "POSTGRES_WTH_PASSWORD": "CHANGE_ME",
-  "POSTGRES_WTH_HOST": "weather-postgres",
-  "POSTGRES_WTH_PORT": 5432,
   "MLFLOW_TRACKING_URI": "https://dagshub.com/Benoth08/may26_mlops_meteo.mlflow",
   "MLFLOW_TRACKING_USERNAME": "",
-  "MLFLOW_TRACKING_PASSWORD": ""
+  "MLFLOW_TRACKING_PASSWORD": "",
+  "WEATHER_POSTGRES_CONN_ID": "weather_postgres",
+  "WEATHER_RAW_PRODUCER_CONFIG":
+    {
+      "batch_size":500,
+      "max_batches":5,
+      "delay":5,
+      "start_batch":1
+    }
 }

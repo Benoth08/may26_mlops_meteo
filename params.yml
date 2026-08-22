@@ -1,0 +1,60 @@
+# ============================================================================
+# Projet : WeatherAUS
+# Paramètres versionnés par DVC
+#
+# Toutes les clés ci-dessous sont effectivement lues par le code (voir
+# core/params.py::load_params()). Les constantes purement métier (noms de
+# colonnes, contraintes de schéma, chemins de fichiers...) ne vivent pas ici :
+# elles proviennent de core/settings.py, source de vérité unique pour ça.
+# ============================================================================
+
+dataset:
+  # Source de données utilisée pour le run
+  # Valeurs possibles : csv | postgres | api
+  source: postgres
+
+csv:
+  path: data/raw/weatherAUS.csv
+
+postgres:
+  # Nom de la table source (schéma public, cf. src/sql/weather/init_data_raw.sql)
+  table: weather_data_raw
+
+api:
+  url: http://localhost:8057/meteo
+
+# ============================================================================
+# Prétraitement
+# ============================================================================
+preprocessing:
+  missing_threshold: 0.50
+
+# ============================================================================
+# Split train / test
+# ============================================================================
+split:
+  strategy: temporal
+  test_size: 0.20
+  random_state: 42
+
+# ============================================================================
+# Evaluation
+# ============================================================================
+evaluation:
+  primary_metric: f1
+  threshold: 0.50
+
+# ============================================================================
+# Training rules
+# ============================================================================
+training:
+  min_new_rows: 1000
+  max_interval_hours: 24
+  min_score_improvement: 0.01
+
+# ============================================================================
+# MLflow
+# ============================================================================
+mlflow:
+  experiment_name: WeatherAUS
+  model_name: rain_prediction

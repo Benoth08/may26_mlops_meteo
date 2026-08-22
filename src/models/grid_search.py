@@ -34,19 +34,27 @@ MODELS_DIR = Path(SETTINGS["paths"]["models"])
 DATASET_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
 PREPROCESSOR_PATH = (MODELS_DIR / SETTINGS["models"]["preprocessor"])
 BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
-MODEL_OUTPUT_PATH = (MODELS_DIR / SETTINGS["models"]["model"])
+
+# Code de sortie signalant à Airflow (DockerOperator.skip_on_exit_code) qu'il
+# n'y a aucune donnée à traiter : la tâche et les tâches en aval doivent être
+# marquées "skipped", pas "failed".
+SKIP_EXIT_CODE = 99
 
 
 def main():
-    
+
     logger.info({"event": "loading_grid_search", "dataset_path": str(DATASET_PATH)})
-    
+
     try :
         data = joblib.load(DATASET_PATH)
         preprocessor = joblib.load(PREPROCESSOR_PATH)
     except FileNotFoundError as e:
-        logger.error({"event": "artifact_not_found", "error": str(e)}, exc_info=True)
-        sys.exit(1)
+        # dataset.joblib absent => le preprocessing en amont a été "skipped"
+        # faute de données (cf. weather_preprocessing). Pas de données,
+        # pas d'entraînement.
+        logger.warning({"event": "grid_search_skipped", "reason": str(e)})
+        print(f"⚠️  grid_search SKIPPED (artefact manquant) : {e}")
+        sys.exit(SKIP_EXIT_CODE)
         
     pipe = Pipeline(steps=[
         ("prep", preprocessor),

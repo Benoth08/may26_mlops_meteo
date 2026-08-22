@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir \
     -r requirements.txt
 
 # Code métier (Entrypoint : src/api_weather/main.py
+COPY params.yml /app/params.yml
 COPY src/core/ /app/core/
 COPY src/api_weather/ /app/
 COPY src/features/build_features.py /app/

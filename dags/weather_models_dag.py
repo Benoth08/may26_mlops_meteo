@@ -17,12 +17,16 @@
         2026-07-11  -  Création du module
 ===============================================================================
 """
+import os
+
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 
 from datetime import datetime, timedelta
 from docker.types import Mount
+
+from core.settings import SETTINGS
 
 import logging
 
@@ -35,23 +39,23 @@ logger = logging.getLogger("airflow.task.models")
 # -----------------------------
 mounts = [
     Mount(
-        source="/home/ubuntu/projet_weather/data",
-        target="/data",
+        source=SETTINGS["docker"]["host_data_dir"],
+        target=SETTINGS["docker"]["container_data_target"],
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/projet_weather/models",
-        target="/models",
+        source=SETTINGS["docker"]["host_models_dir"],
+        target=SETTINGS["docker"]["container_models_target"],
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/projet_weather/metrics",
-        target="/metrics",
+        source=SETTINGS["docker"]["host_metrics_dir"],
+        target=SETTINGS["docker"]["container_metrics_target"],
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/projet_weather/logs",
-        target="/logs",
+        source=SETTINGS["docker"]["host_logs_dir"],
+        target=SETTINGS["docker"]["container_logs_target"],
         type="bind",
     )
 ]
@@ -107,6 +111,11 @@ with DAG(
     start_date=datetime(2026, 6, 1),
     schedule=None,
     catchup=False,
+    # Déclenchable à la fois par weather_training_trigger et manuellement
+    # depuis l'UI : sans cette limite, deux runs concurrents écriraient en
+    # même temps sur les mêmes fichiers (candidate_model.joblib,
+    # best_params.joblib, puis model.joblib côté promote_model.py).
+    max_active_runs=1,
     tags=["mlops26", "weather", "model", "model-training", "model-evaluating"],
 ) as dag:
 
@@ -124,10 +133,14 @@ with DAG(
     # -----------------------------------------
     grid_search = DockerOperator(
         task_id="grid_search",
-        image="models:latest",
+        image=SETTINGS["docker"]["models_image"],
         command="python models/grid_search.py",
         pool="ml_pool",
         mounts=mounts,
+        # Pas de dataset prétraité (preprocessing "skipped" faute de données)
+        # => le script sort en code 99 => skip plutôt que fail, en cascade
+        # sur train_model / evaluate_model / promote_model.
+        skip_on_exit_code=99,
         # Limites CPU & RAM
         mem_limit="4g",
         cpus=2,
@@ -135,6 +148,12 @@ with DAG(
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
+            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"],
+            "WEATHER_HOST_METRICS_DIR":os.environ["WEATHER_HOST_METRICS_DIR"],
         },
         auto_remove="force",
         docker_url="unix:///var/run/docker.sock",
@@ -157,10 +176,12 @@ with DAG(
     # -----------------------------------------
     train_model = DockerOperator(
         task_id="train_model",
-        image="models:latest",
+        image=SETTINGS["docker"]["models_image"],
         command="python models/train_model.py",
         pool="ml_pool",
         mounts=mounts,
+        # Filet de sécurité : artefact manquant => skip plutôt que fail.
+        skip_on_exit_code=99,
         # Limites CPU & RAM
         mem_limit="4g",
         cpus=2,
@@ -168,6 +189,18 @@ with DAG(
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
+            # Contexte transmis par weather_training_trigger (conf du
+            # TriggerDagRunOperator). Absent en cas de déclenchement manuel
+            # du DAG, d'où les valeurs par défaut.
+            "TRAINING_REASON": "{{ (dag_run.conf or {}).get('training_reason', 'manual') }}",
+            "TRAINING_NEW_ROWS": "{{ (dag_run.conf or {}).get('new_rows', 0) }}",
+            "TRAINING_ROW_COUNT": "{{ (dag_run.conf or {}).get('current_row_count', 0) }}",
+            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+            "WEATHER_HOST_MODELS_DIR": os.environ["WEATHER_HOST_MODELS_DIR"],
+            "WEATHER_HOST_METRICS_DIR": os.environ["WEATHER_HOST_METRICS_DIR"],
         },
         auto_remove="force",
         docker_url="unix:///var/run/docker.sock",
@@ -191,10 +224,12 @@ with DAG(
     # -----------------------------------------
     evaluate_model = DockerOperator(
         task_id="evaluate_model",
-        image="models:latest",
+        image=SETTINGS["docker"]["models_image"],
         command="python models/evaluate_model.py",
         pool="ml_pool",
         mounts=mounts,
+        # Filet de sécurité : artefact manquant => skip plutôt que fail.
+        skip_on_exit_code=99,
         # Limites CPU & RAM
         mem_limit="4g",
         cpus=2,
@@ -205,6 +240,12 @@ with DAG(
             "MLFLOW_TRACKING_URI": "{{ var.value.MLFLOW_TRACKING_URI }}",
             "MLFLOW_TRACKING_USERNAME": "{{ var.value.MLFLOW_TRACKING_USERNAME }}",
             "MLFLOW_TRACKING_PASSWORD": "{{ var.value.MLFLOW_TRACKING_PASSWORD }}",
+            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+            "WEATHER_HOST_MODELS_DIR": os.environ["WEATHER_HOST_MODELS_DIR"],
+            "WEATHER_HOST_METRICS_DIR": os.environ["WEATHER_HOST_METRICS_DIR"],
         },
         auto_remove="force",
         docker_url="unix:///var/run/docker.sock",
@@ -228,7 +269,7 @@ with DAG(
     # -----------------------------------------
     promotion_model = DockerOperator(
         task_id="promote_model",
-        image="models:latest",
+        image=SETTINGS["docker"]["models_image"],
         command="python models/promote_model.py",
         pool="ml_pool",
         mounts=mounts,
@@ -239,6 +280,23 @@ with DAG(
             "MLFLOW_TRACKING_URI": "{{ var.value.MLFLOW_TRACKING_URI }}",
             "MLFLOW_TRACKING_USERNAME": "{{ var.value.MLFLOW_TRACKING_USERNAME }}",
             "MLFLOW_TRACKING_PASSWORD": "{{ var.value.MLFLOW_TRACKING_PASSWORD }}",
+            # Requis pour TrainingStateRepository (model_training_status).
+            "POSTGRES_WTH_HOST": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).host }}",
+            "POSTGRES_WTH_PORT": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).port }}",
+            "POSTGRES_WTH_DB": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).schema }}",
+            "POSTGRES_WTH_USER": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).login }}",
+            "POSTGRES_WTH_PASSWORD": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).password }}",
+            # Contexte transmis par weather_training_trigger (conf du
+            # TriggerDagRunOperator). Absent en cas de déclenchement manuel
+            # du DAG, d'où les valeurs par défaut.
+            "TRAINING_REASON": "{{ (dag_run.conf or {}).get('training_reason', 'manual') }}",
+            "TRAINING_ROW_COUNT": "{{ (dag_run.conf or {}).get('current_row_count', 0) }}",
+            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"], 
+            "WEATHER_HOST_METRICS_DIR":os.environ["WEATHER_HOST_METRICS_DIR"],
         },
         docker_url="unix://var/run/docker.sock",
         network_mode="weather",

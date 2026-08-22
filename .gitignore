@@ -24,3 +24,8 @@ config/variables.json
 *.joblib
 data/raw/*.csv
 data/archive/*.csv
+
+# --- Données générées à l'exécution ---
+data/processed/*.csv
+data/raw/*.parquet
+data/raw/config_*.json

@@ -16,13 +16,14 @@
 import argparse
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
 from core.logger import get_logger
 from core.settings import SETTINGS
-from core.config import load_postgres_config
+from core.config import load_postgres_config, ConfigError
 
 from build_features import build_preprocessor, identify_feature_types
 
@@ -48,6 +49,11 @@ DATASET_PATH = PROCESSED_DIR / DATASET_NAME
 X_TRAIN_SCALED_PATH = PROCESSED_DIR / "X_train_scaled.csv"
 X_TEST_SCALED_PATH = PROCESSED_DIR / "X_test_scaled.csv"
 PREPROCESSOR_PATH = MODELS_DIR / PREPROCESSOR_NAME
+
+# Code de sortie signalant à Airflow (DockerOperator.skip_on_exit_code) qu'il
+# n'y a aucune donnée à traiter : la tâche et les tâches en aval doivent être
+# marquées "skipped", pas "failed".
+SKIP_EXIT_CODE = 99
 
 
 # ============================================================
@@ -431,8 +437,13 @@ def main() -> None:
     connstring = cfg.sqlalchemy_uri
     
     logger.info({"event": "normalize_data_start", "host": cfg.host, "db": cfg.db})
-        
-    result = run_normalize_data()
+
+    try:
+        result = run_normalize_data()
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning({"event": "normalize_data_skipped", "reason": str(e)})
+        print(f"⚠️  normalize_data SKIPPED (pas de données) : {e}")
+        sys.exit(SKIP_EXIT_CODE)
 
     try:
         logger.info({"event": "normalize_data_saving", "connection_uri": connstring, "table_name": SETTINGS["postgres"]["table_features"]})

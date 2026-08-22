@@ -1,38 +1,80 @@
 stages:
-  make_dataset:
-    cmd: python -m src.data.make_dataset
+  # 1/ Export des données depuis postgres
+  export_dataset:
+    cmd: python -m src.data_preprocessing.export_dataset --source postgres
     deps:
-    - data/raw/weatherAUS.csv
-    - src/data/make_dataset.py
-    - src/features/build_features.py
+      - src/data_preprocessing/export_dataset.py
+      - src/features/build_features.py
+      - src/core/config.py
+      - src/core/settings.py
+    params:
+      - dataset
+      - csv
+      - postgres
+      - api
     outs:
-    - data/processed/dataset.joblib
-    - models/preprocessor.joblib
+      - data/raw/weather.parquet
+  
+  # 2/ Preparation des données 
+  make_dataset:
+    cmd: python -m src.data_preprocessing.make_dataset
+    deps:
+      - data/raw/weather.parquet
+      - src/data_preprocessing/make_dataset.py
+      - src/core/settings.py
+      - src/core/config.py
+      - src/features/build_features.py
+    params:
+      - preprocessing
+      - split
+    outs:
+      - data/processed/dataset.joblib
+      - models/preprocessor.joblib
+
+  # 3/ Recherche des hyperparamètres
+  # NB : grid_search.py ne lit pas params.yml (grille d'hyperparamètres et
+  # seed codées en dur / issues de core/settings.py) : pas de section params
+  # ici, settings.py est déjà suivi via deps.
   grid_search:
     cmd: python -m src.models.grid_search
     deps:
-    - data/processed/dataset.joblib
-    - models/preprocessor.joblib
-    - src/models/grid_search.py
+      - data/processed/dataset.joblib
+      - models/preprocessor.joblib
+      - src/models/grid_search.py
+      - src/core/settings.py
     outs:
-    - models/best_params.joblib
+      - models/best_params.joblib
+
+  # 4/ Entrainement du modele
+  # NB : idem grid_search.py, train_model.py ne lit pas params.yml.
   train_model:
     cmd: python -m src.models.train_model
     deps:
-    - data/processed/dataset.joblib
-    - models/best_params.joblib
-    - models/preprocessor.joblib
-    - src/models/train_model.py
+      - data/processed/dataset.joblib
+      - models/best_params.joblib
+      - models/preprocessor.joblib
+      - src/models/train_model.py
+      - src/core/settings.py
+      - src/core/metadata.py
     outs:
-    - models/model.joblib
+    - models/candidate_model.joblib
+
+  # 5/ Evaluation du modele
+  # NB : évalue le candidat. models/model.joblib (le fichier réellement
+  # servi) n'est mis à jour que par promote_model.py (hors graphe DVC),
+  # uniquement si la promotion est acceptée.
   evaluate_model:
     cmd: python -m src.models.evaluate_model
     deps:
-    - data/processed/dataset.joblib
-    - models/model.joblib
-    - src/models/evaluate_model.py
+      - data/processed/dataset.joblib
+      - models/candidate_model.joblib
+      - src/models/evaluate_model.py
+      - src/core/settings.py
+    params:
+      - evaluation
+      - mlflow
     outs:
-    - data/predictions.csv
+      - data/predictions.csv
     metrics:
-    - metrics/scores.json:
+      - metrics/scores.json:
         cache: false

@@ -21,11 +21,12 @@ RUN pip install --no-cache-dir \
     -r requirements.txt
 
 # Entrypoint
-COPY src/dockerfiles/data_integration/entrypoint.py .
+COPY src/dockerfiles/data_integration/weather_ingestion_entrypoint.py .
+COPY src/dockerfiles/data_integration/weather_raw_producer_entrypoint.py .
 
 # Code métier
 COPY src/core/ /app/core/
 COPY src/data_integration/ /app/
-COPY data/ /data/
 
-CMD ["python", "entrypoint.py"]
+
+CMD ["python", "weather_ingestion_entrypoint.py"]
