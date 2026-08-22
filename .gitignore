@@ -22,5 +22,5 @@ config/variables.json
 # --- Artefacts ML & données (partout) ---
 *.pkl
 *.joblib
-src/data/*.csv
-src/data/archive/
+data/raw/*.csv
+data/archive/*.csv

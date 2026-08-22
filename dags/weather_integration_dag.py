@@ -1,3 +1,23 @@
+#!/usr/bin/env python3
+"""
+===============================================================================
+    mai26_continu_mlops / projet Weather : Predict next-day rain in Australia
+    ---------------------------------------------------------------------------
+    Sujet :
+        Orchestration Airflow d'ingestion des données
+
+    Description :
+        DAG qui orchestre la chaîne suivante en conteneurs Docker :
+        ingestion
+
+    Version :
+        1.0.0
+
+    Historique :
+        2026-07-11  -  Création du module
+===============================================================================
+"""
+
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -17,12 +37,12 @@ logger = logging.getLogger("airflow.task")
 # -----------------------------
 mounts = [
     Mount(
-        source="/home/ubuntu/scripts/projet_weather/src/data",
+        source="/home/ubuntu/projet_weather/data",
         target="/data",
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/scripts/projet_weather/logs",
+        source="/home/ubuntu/projet_weather/logs",
         target="/logs",
         type="bind",
     )
@@ -91,20 +111,27 @@ with DAG(
     )
 
     # -----------------------------------------
-    # Part. 1 - Integration via Docker 
+    # Etape 1 - Ingestion des donnees
+    # Charge le CSV dans la base PostgreSQL
     # -----------------------------------------
     integration_weather_data = DockerOperator(
         task_id="load_weather_csv",
         image="data-integration:latest",
         command="python entrypoint.py",
+        pool="weather_pool",
         environment={
+            "POSTGRES_WTH_HOST": "{{ var.value.POSTGRES_WTH_HOST }}",
+            "POSTGRES_WTH_PORT": "{{ var.value.POSTGRES_WTH_PORT }}",
             "POSTGRES_WTH_DB": "{{ var.value.POSTGRES_WTH_DB }}",
             "POSTGRES_WTH_USER": "{{ var.value.POSTGRES_WTH_USER }}",
             "POSTGRES_WTH_PASSWORD": "{{ var.value.POSTGRES_WTH_PASSWORD }}",
         },
-        docker_url="unix://var/run/docker.sock",
+        docker_url="unix:///var/run/docker.sock",
         network_mode="weather",
         mounts=mounts,
+        # Limites CPU & RAM
+        mem_limit="2g",
+        cpus=1,
         auto_remove="force",
         mount_tmp_dir=False,
         do_xcom_push=True,

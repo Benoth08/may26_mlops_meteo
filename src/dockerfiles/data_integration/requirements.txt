@@ -1,8 +1,7 @@
-fastapi
-numpy
-pandas
-requests
-scikit-learn
-uvicorn
-sqlalchemy
-psycopg2-binary
+-r ./requirements-ml.txt
+
+fastapi==0.115.6
+requests==2.32.3
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10

@@ -17,32 +17,30 @@
 ===============================================================================
 """
 
-from scripts.weather_loader import WeatherDataLoader
-
-import os
 import sys
 import json
 import time
+
+from core.logger import get_logger
+from core.settings import SETTINGS
+from weather_loader import WeatherDataLoader
+from core.config import load_postgres_config, PostgresConfig, ConfigError
+
+logger = get_logger("entrypoint", console=False)
+ 
+CSV_PATH = str(SETTINGS["paths"]["data"] / SETTINGS["models"]["rawdata"])
 
 
 def main():
 
     # -----------------------------
-    # 1. Lire les variables d'env
-    # ----------------------------- 
-    db = os.getenv("POSTGRES_WTH_DB")
-    user = os.getenv("POSTGRES_WTH_USER")
-    pwd = os.getenv("POSTGRES_WTH_PASSWORD")
-
-    # Vérification explicite
-    if not all([db, user, pwd]):
-        print(json.dumps({
-            "status": "failed",
-            "error": "Missing environment variables",
-            "POSTGRES_WTH_DB": db,
-            "POSTGRES_WTH_USER": user,
-            "POSTGRES_WTH_PASSWORD": pwd
-        }))
+    # 1. Charger la configuration Postgres
+    # -----------------------------
+    try:
+        cfg = load_postgres_config()
+    except ConfigError as e:
+        logger.error({"event": "config_error", "error": str(e)})
+        print(json.dumps({"status": "failed", "error": str(e)}))
         sys.exit(1)
 
     # -----------------------------
@@ -52,15 +50,11 @@ def main():
         
         start = time.time()
 
-        loader = WeatherDataLoader(
-            host="weather-postgres",
-            port=5432,
-            database=db,
-            user=user,
-            password=pwd
-        )
+        logger.info({"event": "integration_start", "csv_path": CSV_PATH, "host": cfg.host})
         
-        result = loader.load_csv("/data/weatherAUS.csv")
+        loader = WeatherDataLoader(cfg)
+        
+        result = loader.load_csv(CSV_PATH)
         duration = time.time() - start
 
         # -----------------------------
@@ -101,11 +95,18 @@ def main():
             if "archive_path" not in result:
                 raise Exception("Import réussi mais champ 'archive_path' manquant")
 
+            logger.info({
+                "event": "integration_success",
+                "rows_imported": result["rows_imported"],
+                "archive_path": result["archive_path"],
+                "duration_seconds": round(duration, 2),
+            })
+            
             # Log succès
             print(json.dumps({
                 "status": "success",
                 "rows_imported": result["rows_imported"],
-                "archive_path": result["archive_path"]
+                "archive_path": str(result["archive_path"])
             }))
 
             return result
@@ -116,6 +117,7 @@ def main():
         raise Exception(f"Valeur de status inconnue : {status}")
 
     except Exception as e:
+        logger.error({"event": "integration_failed", "error": str(e)}, exc_info=True)
         print(json.dumps({"status": "failed", "error": str(e)}))
         raise
 

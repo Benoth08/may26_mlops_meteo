@@ -1,10 +1,18 @@
 """Étape 4 — Évalue le modèle sur le jeu de test mis de côté."""
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-
-import json
 import os
+import sys
+import json
 import joblib
+
 from pathlib import Path
+
+from core.settings import SETTINGS
+from core.logger import get_logger
+ 
+for _env_key, _env_val in SETTINGS["threads"].items():
+    os.environ.setdefault(_env_key, str(_env_val))
+
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 
 import pandas as pd
 from sklearn.metrics import (
@@ -12,15 +20,48 @@ from sklearn.metrics import (
     average_precision_score, precision_score, recall_score,
 )
 
+logger = get_logger("evaluate_model")
+
+MODELS_DIR = Path(SETTINGS["paths"]["models"])
+METRICS_DIR = Path(SETTINGS["paths"]["metrics"])
+PROCESSED_DIR = Path(SETTINGS["paths"]["processed"])
+DATA_DIR = Path(SETTINGS["paths"]["data"])
+
+DATASET_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
+MODEL_PATH = (MODELS_DIR / SETTINGS["models"]["model"])
+METRICS_PATH = (METRICS_DIR / SETTINGS["models"]["metrics"])
+PREDICTIONS_PATH = (DATA_DIR / SETTINGS["models"]["predictions"])
+BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
+
+REGISTERED_MODEL_NAME = SETTINGS["models"]["registered_model_name"]
+
 
 def main():
-    data = joblib.load("data/processed/dataset.joblib")
-    model = joblib.load("models/model.joblib")
-    best_params = joblib.load("models/best_params.joblib")
+    
+    logger.info({"event": "loading_evaluate_model", "model_path": str(MODEL_PATH)})
+    
+    try:
+        data = joblib.load(DATASET_PATH)
+        artifact = joblib.load(MODEL_PATH)
+        if isinstance(artifact, dict):
+            model = artifact["pipeline"]
+            metadata = artifact.get("metadata", {})
+        else:
+            model = artifact
+            metadata = {}
+        best_params = joblib.load(BEST_PARAMS_PATH)
+    except FileNotFoundError as e:
+        logger.error({"event": "artifact_not_found", "error": str(e)}, exc_info=True)
+        sys.exit(1)
 
     X_test, y_test = data["X_test"], data["y_test"]
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
+    
+    try:
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1]
+    except Exception as e:
+        logger.error({"event": "prediction_failed", "error": str(e)}, exc_info=True)
+        sys.exit(1)
 
     scores = {
         "accuracy": accuracy_score(y_test, y_pred),
@@ -31,11 +72,13 @@ def main():
         "recall_pluie": recall_score(y_test, y_pred),
     }
 
-    Path("metrics").mkdir(parents=True, exist_ok=True)
-    with open("metrics/scores.json", "w") as f:
+    METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(METRICS_PATH, "w") as f:
         json.dump(scores, f, indent=2, default=float)
+ 
+    PREDICTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"prediction": y_pred, "probabilite": y_proba}).to_csv(
-        "data/predictions.csv", index=False)
+        PREDICTIONS_PATH, index=False)
 
     # Suivi MLflow (DagsHub) : desactive si MLFLOW_TRACKING_URI n'est pas defini,
     # pour ne pas casser `dvc repro` sur une machine non configuree.
@@ -50,12 +93,12 @@ def main():
             mlflow.log_metrics(scores)
             # cloudpickle : le format par defaut (skops) ne reconnait pas
             # encore les objets LightGBM (UntrustedTypesFoundException).
-            # registered_model_name : enregistre automatiquement une nouvelle
-            # version dans le Model Registry MLflow a chaque run.
             mlflow.sklearn.log_model(
                 model, "model", serialization_format="cloudpickle",
-                registered_model_name="weather-rain-model")
+                registered_model_name=REGISTERED_MODEL_NAME)
 
+    logger.info({"event": "model_evaluated", "scores": scores})
+    
     print("✅ evaluate_model OK")
     for k, v in scores.items():
         print(f"   {k}: {v:.4f}")
