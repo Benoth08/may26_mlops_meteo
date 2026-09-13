@@ -35,4 +35,6 @@ jobs:
         WEATHER_HOST_LOGS_DIR: /home/ubuntu/projet_weather/logs
         WEATHER_HOST_MODELS_DIR: /home/ubuntu/projet_weather/models
         WEATHER_HOST_METRICS_DIR: /home/ubuntu/projet_weather/metrics
+        WEATHER_LOGS_DIR: ${{ github.workspace }}/logs
       run: pytest -v
+
