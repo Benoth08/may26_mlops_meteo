@@ -1,0 +1,188 @@
+# =====================================================
+# LOGS
+# =====================================================
+
+log_format weather_api
+    '$remote_addr - [$time_iso8601] '
+    '"$request" '
+    'status=$status '
+    'request_time=$request_time '
+    'upstream=$upstream_addr '
+    'upstream_status=$upstream_status '
+    'upstream_time=$upstream_response_time';
+
+
+# =====================================================
+# RATE LIMITING
+# =====================================================
+
+limit_req_zone $binary_remote_addr
+    zone=weather_api_limit:10m
+    rate=5r/s;
+
+
+# =====================================================
+# LOAD BALANCING
+# =====================================================
+
+upstream weather_backend {
+
+    zone weather_backend 64k;
+
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    server api-weather-1:8057 resolve max_fails=3 fail_timeout=30s;
+    server api-weather-2:8057 resolve max_fails=3 fail_timeout=30s;
+    server api-weather-3:8057 resolve max_fails=3 fail_timeout=30s;
+    server api-weather-4:8057 resolve max_fails=3 fail_timeout=30s;
+    server api-weather-5:8057 resolve max_fails=3 fail_timeout=30s;
+    server api-weather-6:8057 resolve max_fails=3 fail_timeout=30s;
+}
+
+
+# =====================================================
+# HTTP
+# =====================================================
+
+server {
+
+    listen 80;
+    server_name ${PUBLIC_IP};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+
+# =====================================================
+# HTTPS
+# =====================================================
+
+server {
+
+    listen 443 ssl;
+    server_name ${PUBLIC_IP};
+
+    ssl_certificate
+        /etc/letsencrypt/live/${PUBLIC_IP}/fullchain.pem;
+
+    ssl_certificate_key
+        /etc/letsencrypt/live/${PUBLIC_IP}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    server_tokens off;
+
+
+    # =================================================
+    # LOGS DOCKER
+    # =================================================
+
+    access_log /dev/stdout weather_api;
+    error_log /dev/stderr warn;
+
+
+    # =================================================
+    # SECURITY HEADERS
+    # =================================================
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    add_header Permissions-Policy
+        "geolocation=(), camera=(), microphone=()" always;
+
+
+    # Temporaire : vérification du load balancing
+    add_header X-Upstream-Addr $upstream_addr always;
+
+
+    # =================================================
+    # RATE LIMIT
+    # =================================================
+
+    limit_req_status 429;
+
+
+    # =================================================
+    # HEALTH CHECK
+    # =================================================
+
+    location = /health {
+
+        proxy_pass http://weather_backend;
+
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        proxy_set_header X-Forwarded-For
+            $proxy_add_x_forwarded_for;
+
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_next_upstream
+            error
+            timeout
+            http_502
+            http_503
+            http_504;
+    }
+
+
+    # =================================================
+    # API
+    # =================================================
+
+    location / {
+
+        limit_req
+            zone=weather_api_limit
+            burst=10
+            nodelay;
+
+        proxy_pass http://weather_backend;
+
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        proxy_set_header X-Forwarded-For
+            $proxy_add_x_forwarded_for;
+
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_next_upstream
+            error
+            timeout
+            http_502
+            http_503
+            http_504;
+    }
+}
+
+
+# =====================================================
+# NGINX INTERNAL MONITORING
+# =====================================================
+
+server {
+    listen 8080;
+    server_name localhost;
+
+    access_log off;
+
+    location = /stub_status {
+        stub_status;
+    }
+}

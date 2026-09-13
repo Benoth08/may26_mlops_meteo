@@ -47,6 +47,7 @@ for _env_key, _env_val in THREADS_SETTINGS.items():
 
 
 from routers import meta, predict, weather
+from prometheus_metrics import setup_metrics
 
 logger = get_logger("api")
 
@@ -144,3 +145,7 @@ app.state.api_credentials = {}
 app.include_router(meta.router)
 app.include_router(weather.router)
 app.include_router(predict.router)
+
+# Monitoring Prometheus
+setup_metrics(app)
+
