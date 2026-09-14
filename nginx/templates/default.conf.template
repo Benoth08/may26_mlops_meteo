@@ -29,14 +29,18 @@ upstream weather_backend {
 
     zone weather_backend 64k;
 
-    resolver 127.0.0.11 valid=10s ipv6=off;
-
-    server api-weather-1:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-2:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-3:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-4:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-5:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-6:8057 resolve max_fails=3 fail_timeout=30s;
+    # La directive resolver dans un bloc upstream et le parametre resolve
+    # sur les lignes server n'existent que dans NGINX Plus, la version
+    # payante. Sur l'image libre, ils empechent le demarrage.
+    # Sans eux, les noms sont resolus une fois au demarrage : il faut donc
+    # que les instances soient lancees avant NGINX, ce que depends_on
+    # garantit dans le compose.
+    server api-weather-1:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-2:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-3:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-4:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-5:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-6:8057 max_fails=3 fail_timeout=30s;
 }
 
 
@@ -47,8 +51,9 @@ upstream weather_backend {
 server {
 
     listen 80;
-    server_name ${PUBLIC_IP};
+    server_name _;
 
+    # Conserve pour le jour ou un nom de domaine permettra Let's Encrypt
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
         default_type text/plain;
@@ -68,13 +73,18 @@ server {
 server {
 
     listen 443 ssl;
-    server_name ${PUBLIC_IP};
+    server_name _;
 
+    # Certificat auto-signe, genere par make certs.
+    # Let's Encrypt ne delivre pas de certificat pour une adresse IP,
+    # il en faut un nom de domaine. Tant qu'on n'en a pas, l'auto-signe
+    # chiffre le trafic : le navigateur affiche un avertissement mais
+    # les identifiants ne circulent plus en clair.
     ssl_certificate
-        /etc/letsencrypt/live/${PUBLIC_IP}/fullchain.pem;
+        /etc/nginx/certs/server.crt;
 
     ssl_certificate_key
-        /etc/letsencrypt/live/${PUBLIC_IP}/privkey.pem;
+        /etc/nginx/certs/server.key;
 
     ssl_protocols TLSv1.2 TLSv1.3;
 
