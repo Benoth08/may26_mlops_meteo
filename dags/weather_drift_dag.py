@@ -27,6 +27,11 @@ logger = logging.getLogger("airflow.task.drift")
 # Le script lit les données dans Postgres
 mounts = [
     Mount(
+        source="/home/ubuntu/projet_weather/models",
+        target="/models",
+        type="bind",
+    ),
+    Mount(
         source="/home/ubuntu/projet_weather/reports",
         target="/reports",
         type="bind",
@@ -144,6 +149,8 @@ with DAG(
             "DRIFT_WINDOW_DAYS": "{{ var.value.DRIFT_WINDOW_DAYS }}",
             # Part de colonnes derivees declenchant l'alerte
             "DRIFT_SHARE_THRESHOLD": "{{ var.value.DRIFT_SHARE_THRESHOLD }}",
+            # Seuil de distance au dela duquel une colonne est dite derivee
+            "DRIFT_COLUMN_THRESHOLD": "{{ var.value.DRIFT_COLUMN_THRESHOLD }}",
             # Hausse du taux de valeurs manquantes declenchant l'alerte qualite
             "QUALITY_MISSING_INCREASE": "{{ var.value.QUALITY_MISSING_INCREASE }}",
         },
