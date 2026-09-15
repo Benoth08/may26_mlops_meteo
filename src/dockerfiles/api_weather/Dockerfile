@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+﻿FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Dépendances
+# DÃ©pendances
 COPY src/dockerfiles/common/requirements-ml.txt .
 COPY src/dockerfiles/api_weather/requirements.txt .
 
@@ -22,11 +22,12 @@ RUN pip install --no-cache-dir \
     -r requirements-ml.txt \
     -r requirements.txt
 
-# Code métier (Entrypoint : src/api_weather/main.py
+# Code mÃ©tier (Entrypoint : src/api_weather/main.py
 COPY params.yml /app/params.yml
 COPY src/core/ /app/core/
 COPY src/api_weather/ /app/
 COPY src/features/build_features.py /app/
+COPY src/features/export_dataset.py /app/
 
 #Entrypoint
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8057"]

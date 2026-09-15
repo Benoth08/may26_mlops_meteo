@@ -1,0 +1,85 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "id": null,
+  "panels": [
+    {
+      "type": "row", "title": "Temps réel — trafic et prédictions", "id": 1,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false, "panels": []
+    },
+    {
+      "type": "timeseries", "title": "API requests/sec", "id": 2,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(weather_api_http_requests_total[1m]))", "legendFormat": "requests/s", "refId": "A"}]
+    },
+    {
+      "type": "timeseries", "title": "Latence API p95", "id": 3,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(weather_api_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "timeseries", "title": "Erreurs HTTP", "id": 4,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (status) (rate(weather_api_http_requests_total{status=~\"4..|5..\"}[5m]))", "legendFormat": "HTTP {{status}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries", "title": "Prédictions Yes / No — temps réel", "id": 5,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (prediction) (rate(weather_model_predictions_total[5m]))", "legendFormat": "{{prediction}}", "refId": "A"}]
+    },
+    {
+      "type": "barchart", "title": "Nombre de prédictions sur la période sélectionnée", "id": 6,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (prediction) (increase(weather_model_predictions_total[$__range]))", "legendFormat": "{{prediction}}", "refId": "A", "instant": true}]
+    },
+    {
+      "type": "row", "title": "Offline — dernière évaluation du modèle", "id": 7,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}, "collapsed": false, "panels": []
+    },
+    {
+      "type": "stat", "title": "Accuracy — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 8,
+      "gridPos": {"h": 6, "w": 4, "x": 0, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"accuracy\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "F1 — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 9,
+      "gridPos": {"h": 6, "w": 4, "x": 4, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"f1\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "Precision — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 10,
+      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"precision\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "Recall — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 11,
+      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"recall\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "ROC-AUC — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 12,
+      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"roc_auc\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "PR-AUC — dernière évaluation du modèle", "description": "Valeur calculée lors de la dernière évaluation du modèle. Cette métrique n’est pas calculée en temps réel.", "id": 13,
+      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 18}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(weather_model_offline_quality{metric=\"pr_auc\"})", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["weather-api", "mlops", "prometheus"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timezone": "browser",
+  "title": "Weather MLOps Monitoring",
+  "uid": "weather-mlops-monitoring",
+  "version": 1
+}

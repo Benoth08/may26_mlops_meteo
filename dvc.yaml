@@ -77,4 +77,4 @@ stages:
       - data/predictions.csv
     metrics:
       - metrics/scores.json:
-        cache: false
+          cache: false

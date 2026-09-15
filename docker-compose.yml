@@ -464,6 +464,7 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models
+      - ./metrics:/metrics:ro
       - ./logs:/logs
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8057/health"]

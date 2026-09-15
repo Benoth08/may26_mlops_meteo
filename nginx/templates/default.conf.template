@@ -29,14 +29,14 @@ upstream weather_backend {
 
     zone weather_backend 64k;
 
-    resolver 127.0.0.11 valid=10s ipv6=off;
-
-    server api-weather-1:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-2:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-3:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-4:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-5:8057 resolve max_fails=3 fail_timeout=30s;
-    server api-weather-6:8057 resolve max_fails=3 fail_timeout=30s;
+    # NGINX OSS resout ces noms au demarrage. Le compose attend que les API
+    # soient saines avant de lancer NGINX.
+    server api-weather:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-2:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-3:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-4:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-5:8057 max_fails=3 fail_timeout=30s;
+    server api-weather-6:8057 max_fails=3 fail_timeout=30s;
 }
 
 
@@ -47,7 +47,7 @@ upstream weather_backend {
 server {
 
     listen 80;
-    server_name ${PUBLIC_IP};
+    server_name _;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
@@ -68,13 +68,13 @@ server {
 server {
 
     listen 443 ssl;
-    server_name ${PUBLIC_IP};
+    server_name _;
 
     ssl_certificate
-        /etc/letsencrypt/live/${PUBLIC_IP}/fullchain.pem;
+        /etc/nginx/certs/server.crt;
 
     ssl_certificate_key
-        /etc/letsencrypt/live/${PUBLIC_IP}/privkey.pem;
+        /etc/nginx/certs/server.key;
 
     ssl_protocols TLSv1.2 TLSv1.3;
 
@@ -183,6 +183,10 @@ server {
     access_log off;
 
     location = /stub_status {
+        allow 172.16.0.0/12;
+        allow 10.0.0.0/8;
+        allow 192.168.0.0/16;
+        deny all;
         stub_status;
     }
 }

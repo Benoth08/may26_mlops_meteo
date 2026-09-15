@@ -174,9 +174,23 @@ def convert_types(df: pd.DataFrame) -> pd.DataFrame:
 
         # --- Conversion datetime ---
         elif col_type == "datetime":
-            # Format source DD/MM/YYYY (WeatherAUS) : dayfirst=True est requis,
-            # sinon tout jour > 12 échoue au parsing et devient NaT.
-            df[col_norm] = pd.to_datetime(df[col_norm], errors="coerce", dayfirst=True)
+            # Le dataset historique existe en ISO YYYY-MM-DD et certains flux
+            # externes utilisent DD/MM/YYYY. Parser l'ISO en premier évite que
+            # dayfirst=True inverse mois et jour sur des dates pourtant valides.
+            raw_dates = df[col_norm]
+            parsed_dates = pd.to_datetime(
+                raw_dates,
+                format="%Y-%m-%d",
+                errors="coerce",
+            )
+            missing_dates = parsed_dates.isna() & raw_dates.notna()
+            if missing_dates.any():
+                parsed_dates.loc[missing_dates] = pd.to_datetime(
+                    raw_dates.loc[missing_dates],
+                    errors="coerce",
+                    dayfirst=True,
+                )
+            df[col_norm] = parsed_dates
 
         # --- Conversion string ---
         elif col_type == "string":
@@ -858,10 +872,14 @@ def identify_feature_types(
     X: pd.DataFrame
 ) -> Tuple[List[str], List[str]]:
     """Identifie les variables numériques et catégorielles à partir du contrat de données du DF."""
-    
-    numeric_features = NUMERIC_COLUMNS
 
-    categorical_features = CATEGORICAL_COLUMNS
+    categorical_features = X.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
+    numeric_features = [
+        column for column in X.columns
+        if column not in categorical_features
+    ]
 
     return numeric_features, categorical_features
 
