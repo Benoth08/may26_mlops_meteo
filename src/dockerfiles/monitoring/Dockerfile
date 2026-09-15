@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir \
 
 # Code métier
 COPY src/core/ /app/monitoring/core/
+COPY src/features/ /app/monitoring/
 COPY src/monitoring /app/monitoring/
 
 # Entrypoint par défaut
