@@ -12,6 +12,7 @@ from core.logger import get_logger
 
 from constants import (
     TABLE_RAW,
+    IMPORT_DATE_COLUMN,
     DB_COLUMNS,
     NUMERIC_COLUMNS,
     TARGET,
@@ -22,8 +23,9 @@ from constants import (
     WIND_DIRECTION_COLUMNS,
     CATEGORICAL_COLUMNS,
     normalize_column_name,
-    normalize_data
+    normalize_data,
 )
+
 from deps import get_model, get_engine
 
 from build_features import (
@@ -90,7 +92,13 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
             metadata["features"]["categorical"]
         )
 
-        validate_schema(df, expected_features) 
+        # Validation du sch?ma brut avant feature engineering
+        raw_required_features = [
+            col for col in REQUIRED_COLUMNS
+            if col != TARGET
+        ]
+
+        validate_schema(df, raw_required_features)
         
         # même pipeline que training
         df_conv = convert_types(df)
@@ -103,6 +111,12 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
             df_conv = encode_wind_directions(df_conv)
             df_conv = add_weather_features(df_conv)
             df_conv = drop_unused_columns(df_conv)
+
+            # Validation apr?s feature engineering
+            validate_schema(df_conv, expected_features)
+
+            # Respecter exactement l ordre des features du mod?le
+            df_conv = df_conv[expected_features]
             
             return df_conv
         else:
@@ -143,7 +157,7 @@ def load_row_from_db(request: Request, date: str, location: str):
     query = text(
         f"SELECT {cols} FROM {TABLE_RAW} "
         "WHERE date = :d AND location = :loc "
-        "ORDER BY {IMPORT_DATE_COLUMN} DESC LIMIT 1"
+        f"ORDER BY {IMPORT_DATE_COLUMN} DESC LIMIT 1"
     )
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params={"d": date, "loc": location})
