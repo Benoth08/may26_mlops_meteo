@@ -60,7 +60,7 @@ DATASET_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
 # Modèle candidat produit par train_model.py, pas encore promu.
 MODEL_PATH = (MODELS_DIR / SETTINGS["models"]["candidate_model"])
 METRICS_PATH = (METRICS_DIR / SETTINGS["models"]["metrics"])
-PREDICTIONS_PATH = (DATA_DIR / SETTINGS["models"]["predictions"])
+PREDICTIONS_PATH = (DATA_DIR.parent / SETTINGS["models"]["predictions"])
 BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
 
 REGISTERED_MODEL_NAME = SETTINGS["models"]["registered_model_name"]

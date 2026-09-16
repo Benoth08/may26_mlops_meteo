@@ -498,7 +498,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./logs:/logs
 
   # Container : data-preprocessing
@@ -528,7 +528,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./models:/models
       - ./logs:/logs
   
@@ -553,7 +553,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./models:/models
       - ./metrics:/metrics
       - ./logs:/logs                                

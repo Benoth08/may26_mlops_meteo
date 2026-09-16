@@ -1,17 +1,18 @@
 stages:
   # 1/ Export des données depuis postgres
   export_dataset:
-    cmd: python -m src.data_preprocessing.export_dataset --source postgres
+    cmd: python -m src.features.export_dataset
     deps:
-      - src/data_preprocessing/export_dataset.py
+      - src/features/export_dataset.py
       - src/features/build_features.py
       - src/core/config.py
       - src/core/settings.py
     params:
-      - dataset
-      - csv
-      - postgres
-      - api
+      - params.yml:
+          - dataset
+          - csv
+          - postgres
+          - api
     outs:
       - data/raw/weather.parquet
   
@@ -25,8 +26,9 @@ stages:
       - src/core/config.py
       - src/features/build_features.py
     params:
-      - preprocessing
-      - split
+      - params.yml:
+          - preprocessing
+          - split
     outs:
       - data/processed/dataset.joblib
       - models/preprocessor.joblib
@@ -71,8 +73,9 @@ stages:
       - src/models/evaluate_model.py
       - src/core/settings.py
     params:
-      - evaluation
-      - mlflow
+      - params.yml:
+          - evaluation
+          - mlflow
     outs:
       - data/predictions.csv
     metrics:
