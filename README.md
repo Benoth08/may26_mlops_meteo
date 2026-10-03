@@ -1,125 +1,284 @@
-Prévision météo en Australie (MLOps)
-====================================
+Prévision de pluie en Australie — Projet MLOps
+==============================================
 
-About
------
+Prédire s'il pleuvra le lendemain en Australie, et surtout industrialiser
+cette prédiction de bout en bout : de l'arrivée d'une donnée brute
+jusqu'au réentraînement automatique du modèle en production.
 
-Ce projet est un projet MLOps de bout en bout. L'objectif est de prévoir s'il pleuvra ou non le lendemain en Australie, à partir d'observations météo quotidiennes. C'est un problème de classification binaire : la cible RainTomorrow vaut Oui ou Non.
+Classification binaire, cible `RainTomorrow`. Jeu de données Kaggle
+*Weather Dataset Rattle Package* : 145 460 observations, 23 variables,
+49 stations, de novembre 2007 à juin 2017.
 
-Les données proviennent du jeu de données "Weather Dataset Rattle Package" (Kaggle). Il rassemble environ dix ans d'observations quotidiennes issues de nombreuses stations météo australiennes (environ 145 000 lignes et 23 variables).
-
-Le projet est réalisé en équipe de trois, avec une répartition des rôles : ingestion et base de données, préparation des données, et modélisation avec suivi des expériences.
-
-
-Modèle et métriques
--------------------
-
-L'algorithme d'entraînement est LightGBM, un modèle de gradient boosting choisi pour ses bonnes performances sur des données tabulaires. Il est entraîné avec une pondération des classes (class_weight équilibré) pour compenser le déséquilibre entre les jours de pluie et les jours sans pluie. Les hyperparamètres sont réglés par recherche sur grille (GridSearch) avec une validation croisée temporelle (TimeSeriesSplit), et le prétraitement est intégré au pipeline scikit-learn pour éviter toute fuite de données. Le découpage train / test est chronologique : on apprend sur le passé et on teste sur les données les plus récentes.
-
-Plusieurs métriques sont calculées et suivies, même si le F1 reste le critère de décision :
-
-- F1-score (classe pluie) : la métrique principale du projet.
-- Accuracy : le taux global de bonnes prévisions.
-- ROC-AUC : la capacité du modèle à séparer les deux classes.
-- PR-AUC : le compromis précision / rappel, utile quand la classe pluie est rare.
-- Précision (pluie) : la part de bonnes prévisions parmi les jours annoncés pluvieux.
-- Rappel (pluie) : la part des jours de pluie réellement détectés.
+Projet d'équipe réalisé dans le cadre de la formation MLOps
+DataScientest.
 
 
-App Architecture
-----------------
-
-Le projet est découpé en plusieurs conteneurs Docker. L'idée est simple : chaque conteneur a une seule responsabilité. Cela rend l'ensemble plus facile à comprendre, à redémarrer et à faire évoluer, et garantit que tout le monde travaille dans le même environnement.
-
-Un conteneur persistant tourne en continu. Un conteneur éphémère exécute une tâche puis s'arrête.
-
-Les conteneurs principaux du projet :
-
-- PostgreSQL météo (persistant) : la base de données qui stocke les observations météo. C'est la source unique des données pour tout le reste du projet, elle doit rester disponible en permanence.
-- Intégration des données (éphémère) : charge le fichier CSV dans la base PostgreSQL, puis s'arrête. C'est une tâche ponctuelle, pas un service.
-- API de données (persistant) : un service FastAPI qui interroge la base pour consulter les observations météo déjà ingérées (dernier import, valeurs par date et station).
-- API de prédiction (persistant) : un second service FastAPI qui charge le modèle entraîné et prédit s'il pleuvra demain, à partir d'observations envoyées en JSON ou en CSV.
-
-L'orchestration est assurée par Airflow, qui planifie et lance automatiquement les étapes du projet (par exemple l'ingestion). Airflow est un système distribué : sa stack (base interne, file Redis, planificateur, worker, serveur web) est persistante, sauf le conteneur d'initialisation qui est éphémère (il prépare Airflow au premier démarrage puis s'arrête).
-
-En complément, une petite interface Streamlit sert de vitrine de démonstration : elle permet de saisir des conditions météo dans un formulaire et d'afficher la prévision de pluie, sans appeler l'API à la main. C'est une couche de présentation optionnelle, pas un élément du coeur du projet.
-
-À noter : il n'y a pas encore de conteneur Docker pour l'entraînement. Aujourd'hui, l'entraînement du modèle se lance en local (avec run_ml.py ou les quatre scripts de src), pas dans Docker. Les conteneurs d'entraînement, d'évaluation et de validation du modèle existent uniquement sous forme de lignes commentées dans le docker-compose : ils sont prévus mais pas encore construits. Les quatre scripts modulaires sont justement faits pour cela : chacun deviendra un conteneur éphémère (préparation, entraînement, évaluation), orchestré par Airflow ou via la pipeline DVC.
-
-En résumé : l'application météo tourne sur quatre conteneurs principaux (base de données persistante, ingestion éphémère, API de données et API de prédiction toutes deux persistantes), Airflow ajoute le moteur d'orchestration, et Streamlit offre une interface de démonstration.
-
-
-Repository Tree
+Chaîne complète
 ---------------
 
 ```
-may26_mlops_meteo/
-├── README.md                 <- Ce fichier
-├── LICENSE
-├── requirements.txt          <- Dépendances Python (versions figées)
-├── makefile                  <- Commandes Docker (build, start, stop, reset)
-├── docker-compose.yml        <- Orchestration de tous les conteneurs
-├── .env.example              <- Modèle de variables d'environnement (secrets)
-├── .gitignore
-├── pytest.ini                <- Configuration des tests
-│
-├── run_ml.py                 <- Chaîne ML complète en un seul script
-├── inference_api.py          <- API d'inférence (prévision de pluie)
-├── streamlit_app.py          <- Interface web de démonstration (Streamlit)
-│
-├── .github/
-│   └── workflows/
-│       └── python-app.yml    <- Intégration continue (lint + tests)
-│
-├── config/
-│   └── variables.json.example  <- Variables Airflow (modèle)
-│
-├── dags/
-│   └── weather_integration_dag.py  <- DAG Airflow : ingestion planifiée
-│
-├── data/                     <- Données (non versionnées sur Git)
-│   ├── raw/                  <- CSV brut weatherAUS
-│   └── processed/            <- Jeux préparés (train / test)
-│
-├── logs/                     <- Logs d'exécution
-├── models/                   <- Modèles entraînés (non versionnés sur Git)
-├── metrics/                  <- Scores du modèle (scores.json)
-├── notebooks/                <- Notebooks d'exploration
-├── references/               <- Dictionnaire de données, notes
-├── reports/
-│   └── figures/              <- Graphiques générés
-│
-└── src/                      <- Code source
-    ├── data/
-    │   └── make_dataset.py       <- Étape 1 : split chronologique train / test
-    ├── features/
-    │   └── build_features.py     <- Prétraitement et feature engineering
-    ├── models/
-    │   ├── grid_search.py        <- Étape 2 : réglage des hyperparamètres
-    │   ├── train_model.py        <- Étape 3 : entraînement du modèle final
-    │   ├── evaluate_model.py     <- Étape 4 : évaluation sur le test
-    │   └── predict_model.py      <- Prédiction (à compléter)
-    ├── visualization/
-    │   └── visualize.py          <- Graphiques
-    ├── scripts/
-    │   ├── core/
-    │   │   └── logger.py         <- Logger commun
-    │   └── data_integration/
-    │       └── weather_loader.py <- Chargement du CSV vers PostgreSQL
-    ├── sql/
-    │   └── weather/
-    │       └── init_weather.sql  <- Création de la table PostgreSQL
-    └── dockerfiles/              <- Un Dockerfile par service
-        ├── airflow/             <- Image Airflow
-        ├── api_weather/         <- Image de l'API de données
-        ├── api_inference/       <- Image de l'API de prédiction
-        └── data_integration/    <- Image du job d'ingestion
+ Lots de données (simulation d'arrivée)
+            |
+            v
+   [ Ingestion ]  ---------->  PostgreSQL
+            |                       |
+            |                       v
+            |              [ Préprocessing ]  --->  dataset.joblib
+            |                                             |
+            |                                             v
+            |                              [ Entraînement ]  ---> MLflow Registry
+            |                                             |            |
+            |                                             v            v
+            |                                      model.joblib    Promotion
+            |                                             |
+            v                                             v
+   [ Surveillance ]  <----------------------------  API de prédiction
+            |                                             |
+            +-----> déclenche le réentraînement           v
+                                                    NGINX (HTTPS)
+                                                          |
+                                                    Prometheus
+                                                          |
+                                                      Grafana
 ```
 
-Note : les dossiers data, models, metrics et logs ne sont pas versionnés sur Git (voir .gitignore). Les données et les modèles seront partagés via DVC et DagsHub en Phase 2.
+
+Pile technique
+--------------
+
+| Besoin | Outil |
+|---|---|
+| Orchestration | Apache Airflow 3.2, six DAG |
+| Conteneurisation | Docker Compose |
+| Stockage | PostgreSQL 16 |
+| Versionnement des données | DVC |
+| Suivi des expériences | MLflow sur DagsHub |
+| API | FastAPI, découpée en routeurs |
+| Proxy, TLS, répartition de charge | NGINX |
+| Métriques | Prometheus |
+| Tableaux de bord | Grafana |
+| Détection de dérive | Evidently 0.7 |
+| Modèle | LightGBM |
+| Qualité du code | flake8, pytest, GitHub Actions |
 
 
-Étapes suivantes (Phase 2)
+Démarrage
+---------
+
+```bash
+git clone <url> /home/ubuntu/projet_weather
+cd /home/ubuntu/projet_weather
+
+cp .env.example .env                                  # puis remplir
+cp config/variables.json.example config/variables.json
+
+make install
+```
+
+Le chemin `/home/ubuntu/projet_weather` est imposé : les DAG lancent des
+conteneurs voisins, dont les montages sont interprétés par le démon
+Docker de l'hôte.
+
+Pour ajouter la couche de supervision :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+```
+
+| Service | Adresse |
+|---|---|
+| Airflow | http://localhost:8080 |
+| API via NGINX | https://localhost, documentation sur `/docs` |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
+
+Le certificat est auto-signé : le navigateur affiche un avertissement, le
+trafic est néanmoins chiffré.
+
+Détail des commandes, accès et dépannage : `docs/exploitation.md`.
+
+
+Les six DAG
+-----------
+
+| DAG | Cadence | Rôle |
+|---|---|---|
+| `weather_rawdata_producer` | manuel | Découpe le jeu de données en lots, simule une arrivée continue |
+| `weather_csv_integration` | chaque minute | Détecte un fichier, le charge, archive, se relance s'il en reste |
+| `weather_preprocessing` | toutes les 20 min | Extraction, prétraitement, normalisation |
+| `weather_training_trigger` | chaque heure | Déclenche l'entraînement si les conditions sont réunies |
+| `weather_models` | 1er du mois à 3h | Grid search, entraînement, évaluation, promotion |
+| `weather_drift` | lundi à 4h | Surveillance des données et des prédictions |
+
+Les heures sont en temps universel.
+
+
+Modèle
+------
+
+LightGBM avec pondération des classes, hyperparamètres réglés par
+recherche sur grille et validation croisée temporelle. Le prétraitement
+est intégré au pipeline scikit-learn, ce qui exclut toute fuite de
+données. Découpage chronologique : on apprend sur le passé, on teste sur
+le récent.
+
+Métrique de décision : le F1 sur la classe pluie. Avec 78 % de jours
+secs, l'accuracy récompenserait un modèle qui prédit toujours « pas de
+pluie ».
+
+
+API
+---
+
+| Routeur | Endpoints | Accès |
+|---|---|---|
+| `meta` | `/`, `/health`, `/last-import` | public |
+| `predict` | `/predict`, `/predict/batch`, `/predict/from-db` | authentifié |
+| `weather` | `/weather`, `/weather/features`, `/weather/all-features` | authentifié |
+
+Authentification HTTP Basic, mot de passe stocké sous forme d'empreinte
+bcrypt, comparaison de l'identifiant en temps constant. `/health` reste
+public pour les contrôles de santé.
+
+L'API lit `models/model.joblib`, partagé avec les conteneurs ML : une
+promotion est prise en compte à la requête suivante, sans redémarrage.
+
+
+Surveillance et réentraînement
+------------------------------
+
+Quatre signaux, du plus précoce au plus fiable :
+
+| Signal | Besoin de la vérité terrain | Délai |
+|---|---|---|
+| Qualité des données | non | immédiat |
+| Dérive des données | non | hebdomadaire |
+| Dérive des prédictions | non | hebdomadaire |
+| Chute de performance (F1) | oui | au réentraînement |
+
+En production, on ne sait pas s'il a plu avant le lendemain : le F1 ne
+peut pas être calculé en temps réel. La dérive des prédictions comble ce
+trou.
+
+**Règle de décision** : la qualité prime sur la dérive. Des doublons ou
+une hausse des valeurs manquantes signalent un pipeline cassé, pas un
+monde qui change ; réentraîner reviendrait à apprendre la corruption.
+
+**Deux déclencheurs** : cadence mensuelle comme filet de sécurité, et
+détection de dérive.
+
+**Promotion conditionnelle** : le nouveau modèle n'est promu que s'il bat
+celui en production, les deux étant évalués sur le **même jeu de test**.
+Le modèle en production est rechargé depuis le Registry et réévalué sur
+les données courantes. Sans cela, on comparerait deux scores calculés sur
+des jeux différents, ce qui se produit à chaque arrivée de données.
+
+Détail de la calibration des seuils : `docs/surveillance.md`.
+
+
+Reproductibilité
+----------------
+
+`dvc.yaml` décrit le pipeline en cinq étapes. Modifier un paramètre dans
+`params.yml` invalide automatiquement les étapes concernées, et elles
+seules.
+
+MLflow conserve pour chaque exécution les paramètres, les métriques, les
+artefacts et le modèle enregistré.
+
+| Fichier | Contenu | Versionné |
+|---|---|---|
+| `.env` | Identifiants bases, MLflow, API | non |
+| `config/variables.json` | Variables Airflow | non |
+| `params.yml` | Paramètres métier du pipeline | oui |
+| `src/core/settings.py` | Chemins, noms de tables et colonnes | oui |
+
+
+Validation de bout en bout
 --------------------------
 
-La Phase 2 ajoutera le suivi des expériences avec MLflow et le versioning des données et des modèles avec DVC. Le dépôt DagsHub, qui servira à la fois de stockage distant pour DVC et de serveur MLflow partagé entre les membres de l'équipe, est déjà connecté au projet. C'est aussi à ce moment que les conteneurs d'entraînement et d'évaluation seront construits, à partir des scripts existants.
+Un script automatise la vérification de la chaîne complète :
+
+```powershell
+.\run_e2e_tests.ps1                        # services et contrôles rapides
+.\run_e2e_tests.ps1 -FullPipeline          # + pipeline DVC complet
+.\run_e2e_tests.ps1 -FullPipeline -Promote # + promotion du modèle
+```
+
+Chaque composant est rapporté en PASS, FAIL ou SKIP. Le script est écrit
+en PowerShell et requiert Docker Desktop.
+
+
+Intégration continue
+--------------------
+
+GitHub Actions sur chaque pull request : installation des dépendances,
+analyse flake8 bloquante, puis tests pytest.
+
+
+Structure du dépôt
+------------------
+
+```
+├── dags/                      Les six DAG Airflow
+├── data/
+│   ├── incoming/              Lots en attente d'ingestion
+│   ├── raw/                   Données sources
+│   ├── processed/             Jeu de données préparé
+│   └── archive/               Lots déjà ingérés
+├── docs/                      Documentation détaillée
+├── grafana/                   Tableaux de bord provisionnés
+├── models/                    Modèle servi par l'API
+├── nginx/                     Configuration du proxy et certificats
+├── notebooks/                 Exploration
+├── prometheus/                Configuration de la collecte
+├── reports/                   Rapports de dérive
+├── src/
+│   ├── api_weather/           API FastAPI et ses routeurs
+│   ├── core/                  Configuration, journalisation, paramètres
+│   ├── data_integration/      Ingestion et production de lots
+│   ├── data_preprocessing/    Préparation du jeu de données
+│   ├── features/              Construction des variables
+│   ├── models/                Entraînement, évaluation, promotion
+│   ├── monitoring/            Détection de dérive
+│   ├── dockerfiles/           Une image par service
+│   └── sql/                   Schéma de la base
+├── tests/
+├── docker-compose.yml         Socle applicatif
+├── docker-compose.monitoring.yml  NGINX, instances, Prometheus, Grafana
+├── dvc.yaml                   Pipeline versionné
+├── params.yml                 Paramètres du pipeline
+├── run_e2e_tests.ps1          Validation de bout en bout
+└── makefile                   Commandes courantes
+```
+
+
+Documentation
+-------------
+
+| Document | Contenu |
+|---|---|
+| `docs/architecture.md` | Conteneurs, DAG, chemin des données, configuration |
+| `docs/surveillance.md` | Les quatre signaux, calibration des seuils, promotion |
+| `docs/exploitation.md` | Installation, commandes, pannes courantes |
+| `DVC.md` | Versionnement des données |
+| `MLFLOW.md` | Suivi des expériences |
+
+La documentation de l'API est générée automatiquement sur `/docs`.
+
+
+Limites connues
+---------------
+
+- **Certificat auto-signé** : chiffre le trafic mais ne prouve pas
+  l'identité du serveur, faute de nom de domaine. Let's Encrypt ne
+  délivre pas de certificat pour une adresse IP.
+- **Un seul compte d'API**, sans gestion de rôles.
+- **Secrets dans un fichier**, suffisant en développement.
+- **Métriques de qualité du modèle** issues de l'évaluation à
+  l'entraînement : elles sont figées entre deux réentraînements, la
+  vérité terrain n'étant pas disponible en temps réel.
+- **Calibration des seuils** établie sur cinq paires d'années
+  consécutives.
+- **Données figées** : la simulation démontre le mécanisme, elle ne
+  remplace pas un flux réel.
