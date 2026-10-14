@@ -281,10 +281,17 @@ SETTINGS = {
         "host_logs_dir": os.environ["WEATHER_HOST_LOGS_DIR"],
         "host_models_dir": os.environ["WEATHER_HOST_MODELS_DIR"],
         "host_metrics_dir": os.environ["WEATHER_HOST_METRICS_DIR"],
+        # Déduit du dossier models s'il n'est pas déclaré : les deux sont
+        # côte à côte à la racine du dépôt. Évite de casser un .env existant.
+        "host_reports_dir": os.environ.get(
+            "WEATHER_HOST_REPORTS_DIR",
+            str(Path(os.environ["WEATHER_HOST_MODELS_DIR"]).parent / "reports"),
+        ),
         "container_data_target": "/data", # cible dans le conteneur d'intégration, peut rester en dur
         "container_logs_target": "/logs",
         "container_models_target": "/models",
         "container_metrics_target": "/metrics",
+        "container_reports_target": "/reports",
         "airflow_data_dir": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
         "airflow_logs_dir": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
         "folder_data_incoming": DATA_INCOMING_FLD,
@@ -295,7 +302,8 @@ SETTINGS = {
         "network": "weather", 
         "data-integration_image": f"data-integration:{os.environ.get('WEATHER_INTEGRATION_IMAGE_TAG', 'latest')}",
         "data-preprocessing_image":  f"data-preprocessing:{os.environ.get('WEATHER_PREPROCESSING_IMAGE_TAG', 'latest')}",
-        "models_image":  f"models:{os.environ.get('WEATHER_MODELS_IMAGE_TAG', 'latest')}"
+        "models_image":  f"models:{os.environ.get('WEATHER_MODELS_IMAGE_TAG', 'latest')}",
+        "monitoring_image":  f"monitoring:{os.environ.get('WEATHER_MONITORING_IMAGE_TAG', 'latest')}"
     },
     
     "models": {

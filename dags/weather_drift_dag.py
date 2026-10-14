@@ -18,6 +18,8 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from datetime import datetime, timedelta
 from docker.types import Mount
 
+from core.settings import SETTINGS
+
 import logging
 
 # Logger Airflow
@@ -27,18 +29,18 @@ logger = logging.getLogger("airflow.task.drift")
 # Le script lit les données dans Postgres
 mounts = [
     Mount(
-        source="/home/ubuntu/projet_weather/models",
-        target="/models",
+        source=SETTINGS["docker"]["host_models_dir"],
+        target=SETTINGS["docker"]["container_models_target"],
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/projet_weather/reports",
-        target="/reports",
+        source=SETTINGS["docker"]["host_reports_dir"],
+        target=SETTINGS["docker"]["container_reports_target"],
         type="bind",
     ),
     Mount(
-        source="/home/ubuntu/projet_weather/logs",
-        target="/logs",
+        source=SETTINGS["docker"]["host_logs_dir"],
+        target=SETTINGS["docker"]["container_logs_target"],
         type="bind",
     )
 ]
@@ -133,7 +135,7 @@ with DAG(
     # La comparaison annuelle evite de confondre saison et derive.
     detect_drift = DockerOperator(
         task_id="detect_drift",
-        image="monitoring:latest",
+        image=SETTINGS["docker"]["monitoring_image"],
         command="python monitoring/drift_detection.py",
         pool="weather_pool",
         mounts=mounts,

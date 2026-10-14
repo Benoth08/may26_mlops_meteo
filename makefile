@@ -118,6 +118,11 @@ rebuild-models: check-env
 	$(DOCKER_COMPOSE) build models
 	@echo "models reconstruit."
 
+## Rebuild image de surveillance
+rebuild-monitoring: check-env
+	$(DOCKER_COMPOSE) build monitoring
+	@echo "monitoring reconstruit."
+
 ## Rebuild API Weather
 reset-apiweather: check-env
 	$(DOCKER_COMPOSE) build api-weather
