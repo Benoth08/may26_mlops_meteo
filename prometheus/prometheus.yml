@@ -38,9 +38,9 @@ scrape_configs:
     static_configs:
 
       - targets:
-          - "api-weather-1:8057"
+          - "api-weather:8057"
         labels:
-          replica: "api-weather-1"
+          replica: "api-weather"
 
       - targets:
           - "api-weather-2:8057"

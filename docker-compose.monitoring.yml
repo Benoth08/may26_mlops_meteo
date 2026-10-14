@@ -1,0 +1,139 @@
+x-api-weather-replica: &api-weather-replica
+  image: weather-api:monitoring
+  build:
+    context: .
+    dockerfile: ./src/dockerfiles/api_weather/Dockerfile
+  env_file:
+    - .env
+  environment:
+    OMP_NUM_THREADS: 1
+    MKL_NUM_THREADS: 1
+    NUMEXPR_NUM_THREADS: 1
+    API_AUTH_USERNAME: ${API_AUTH_USERNAME}
+    API_AUTH_PASSWORD_HASH: ${API_AUTH_PASSWORD_HASH}
+    POSTGRES_WTH_DB: ${POSTGRES_WTH_DB}
+    POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
+    POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
+  depends_on:
+    postgres-weather:
+      condition: service_healthy
+  restart: always
+  networks:
+    - weather
+    - monitoring
+  expose:
+    - "8057"
+  volumes:
+    - ./data:/data
+    - ./models:/models
+    - ./metrics:/metrics:ro
+    - ./logs:/logs
+  healthcheck:
+    test: ["CMD", "curl", "--fail", "http://localhost:8057/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+
+services:
+  api-weather:
+    image: weather-api:monitoring
+    ports: !reset []
+    expose:
+      - "8057"
+    networks:
+      - weather
+      - monitoring
+
+  api-weather-2:
+    <<: *api-weather-replica
+  api-weather-3:
+    <<: *api-weather-replica
+  api-weather-4:
+    <<: *api-weather-replica
+  api-weather-5:
+    <<: *api-weather-replica
+  api-weather-6:
+    <<: *api-weather-replica
+
+  nginx:
+    image: weather-nginx:monitoring
+    build:
+      context: .
+      dockerfile: ./nginx/Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - monitoring
+    volumes:
+      - ./nginx/templates/default.conf.template:/etc/nginx/conf.d/default.conf:ro
+      - nginx-certs:/etc/nginx/certs
+    command: >-
+      /bin/sh -c "if [ ! -s /etc/nginx/certs/server.crt ]; then
+      openssl req -x509 -nodes -newkey rsa:2048 -days 3650
+      -keyout /etc/nginx/certs/server.key
+      -out /etc/nginx/certs/server.crt
+      -subj /CN=localhost;
+      fi;
+      exec nginx -g 'daemon off;'"
+    depends_on:
+      api-weather:
+        condition: service_healthy
+      api-weather-2:
+        condition: service_healthy
+      api-weather-3:
+        condition: service_healthy
+      api-weather-4:
+        condition: service_healthy
+      api-weather-5:
+        condition: service_healthy
+      api-weather-6:
+        condition: service_healthy
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.2
+    command: ["--nginx.scrape-uri=http://nginx:8080/stub_status"]
+    restart: always
+    expose:
+      - "9113"
+    networks:
+      - monitoring
+    depends_on:
+      - nginx
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: always
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - nginx-exporter
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    restart: always
+    ports:
+      - "3000:3000"
+    networks:
+      - monitoring
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  nginx-certs:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  monitoring:

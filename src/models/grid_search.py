@@ -64,7 +64,17 @@ def main():
 
     grid = {"model__n_estimators": [100, 200], "model__num_leaves": [31, 63]}
     cv = TimeSeriesSplit(n_splits=3)
-    search = GridSearchCV(pipe, grid, cv=cv, scoring="f1", n_jobs=-1, verbose=1)
+    # Une valeur illimitee peut saturer Docker Desktop sur le dataset complet.
+    # Le niveau de parallelisme reste configurable pour les runners plus grands.
+    grid_search_jobs = int(os.getenv("WEATHER_GRID_SEARCH_JOBS", "1"))
+    search = GridSearchCV(
+        pipe,
+        grid,
+        cv=cv,
+        scoring="f1",
+        n_jobs=grid_search_jobs,
+        verbose=1,
+    )
     
     try:
         search.fit(data["X_train"], data["y_train"])

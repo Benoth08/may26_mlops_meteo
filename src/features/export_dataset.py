@@ -33,6 +33,7 @@ import numpy as np
 from core.logger import get_logger
 from core.settings import SETTINGS
 from core.params import load_params
+from core.config import load_postgres_config
 from core.metadata import NON_TECHNICAL_COLUMNS                                          
 
 
@@ -373,6 +374,10 @@ def main():
     API_URL = PARAMS["api"]["url"]
 
     connection_uri = os.environ.get("POSTGRES_URI")
+
+    # Fallback sur les variables POSTGRES_WTH_* du projet.
+    if SOURCE == "postgres" and not connection_uri:
+        connection_uri = load_postgres_config().sqlalchemy_uri
 
     logger.info(
         {

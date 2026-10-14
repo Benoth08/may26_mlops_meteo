@@ -464,6 +464,7 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models
+      - ./metrics:/metrics:ro
       - ./logs:/logs
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8057/health"]
@@ -497,7 +498,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./logs:/logs
 
   # Container : data-preprocessing
@@ -527,7 +528,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./models:/models
       - ./logs:/logs
   
@@ -552,7 +553,7 @@ services:
     networks:
       - weather
     volumes:
-      - /data:/data
+      - ./data:/data
       - ./models:/models
       - ./metrics:/metrics
       - ./logs:/logs                                

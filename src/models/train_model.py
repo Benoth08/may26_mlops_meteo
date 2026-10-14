@@ -112,6 +112,14 @@ def build_model_metadata(data):
         .tolist()
     )
 
+    categorical_features = data["X_train"].select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
+    numeric_features = [
+        column for column in data["X_train"].columns
+        if column not in categorical_features
+    ]
+
     return {
         "created_at": datetime.now(
             timezone.utc
@@ -136,9 +144,9 @@ def build_model_metadata(data):
         # ------------------------------------------------------------------
         "target": SETTINGS["target"]["column_norm"],
         "features": {
-            "numeric": NUMERIC_COLUMNS,
-            "categorical": CATEGORICAL_COLUMNS,
-            "all": FEATURE_COLUMNS,
+            "numeric": numeric_features,
+            "categorical": categorical_features,
+            "all": data["X_train"].columns.tolist(),
         },
 
         # ------------------------------------------------------------------

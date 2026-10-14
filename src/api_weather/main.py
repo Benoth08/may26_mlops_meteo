@@ -47,7 +47,11 @@ for _env_key, _env_val in THREADS_SETTINGS.items():
 
 
 from routers import meta, predict, weather
-from prometheus_metrics import setup_metrics
+from prometheus_metrics import (
+    setup_metrics,
+    update_model_status,
+    load_model_evaluation_metrics,
+)
 
 logger = get_logger("api")
 
@@ -90,7 +94,15 @@ async def lifespan(app: FastAPI):
 
     # Chargement anticipé du modèle
     try:
-        model_manager.get_model()
+        _, metadata = model_manager.get_model()
+
+        update_model_status(
+            loaded=True,
+            metadata=metadata,
+        )
+
+        load_model_evaluation_metrics()
+
         logger.info(
             {
                 "event": "startup_ready",
@@ -98,6 +110,10 @@ async def lifespan(app: FastAPI):
             }
         )
     except FileNotFoundError as e:
+        update_model_status(
+            loaded=False,
+        )
+
         logger.warning(
             {
                 "event": "model_unavailable_at_startup",

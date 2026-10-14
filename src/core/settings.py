@@ -171,7 +171,12 @@ MODELS_DIR = Path("/models")
 REPORTS_DIR = Path("reports")
 FIGURES_DIR = REPORTS_DIR / "figures"
 METRICS_DIR = Path("/metrics")
-LOGS_DIR = Path(os.getenv("WEATHER_LOGS_DIR", "/logs"))
+_DEFAULT_LOGS_DIR = (
+    Path("/logs")
+    if Path("/.dockerenv").exists()
+    else Path(__file__).resolve().parents[2] / "logs"
+)
+LOGS_DIR = Path(os.getenv("WEATHER_LOGS_DIR", str(_DEFAULT_LOGS_DIR)))
 
 # ============================================================================
 # Artefacts Modele

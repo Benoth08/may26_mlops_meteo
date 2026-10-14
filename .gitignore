@@ -29,3 +29,5 @@ data/archive/*.csv
 data/processed/*.csv
 data/raw/*.parquet
 data/raw/config_*.json
+
+.venv312/

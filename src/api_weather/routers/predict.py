@@ -4,6 +4,7 @@ Endpoints d'inférence :
     POST /predict-batch      fichier CSV de nouvelles obs.  -> prédictions
     GET  /predict-from-db    rejoue une ligne déjà ingérée  -> test / démo
 """
+import time
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -14,6 +15,10 @@ from auth import check_auth
 from constants import MAX_BATCH_ROWS
 from inference import featurize, load_row_from_db, proba_of
 from schemas import WeatherInput
+from prometheus_metrics import (
+    record_prediction,
+    record_batch,
+)
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
@@ -37,7 +42,12 @@ def predict(item: WeatherInput, auth: bool = Depends(check_auth)):
             "columns": X.columns.tolist(),
             "shape": X.shape
         })
+        start = time.perf_counter()
         p = float(proba_of(X)[0])
+        duration = time.perf_counter() - start
+
+        record_prediction(probability=p, duration=duration)
+
         return {"rain_tomorrow": "Yes" if p >= 0.5 else "No", "probability": round(p, 4)}
     except HTTPException:
         raise
@@ -88,7 +98,12 @@ async def predict_batch(file: UploadFile = File(...), auth: bool = Depends(check
     if X.empty:
         raise HTTPException(400, "Aucune ligne exploitable (dates invalides ?).")
 
+    start = time.perf_counter()
     p = proba_of(X)
+    duration = time.perf_counter() - start
+
+    record_batch(probabilities=p, duration=duration)
+
     out = pd.DataFrame({
         "Date": raw.loc[X.index, "Date"].values,
         "Location": raw.loc[X.index, "Location"].values,
@@ -113,7 +128,10 @@ def predict_from_db(
     X = featurize(df)
     if X.empty:
         raise HTTPException(400, "Ligne écartée au prétraitement (date invalide).")
+    start = time.perf_counter()
     p = float(proba_of(X)[0])
+    duration = time.perf_counter() - start
+    record_prediction(probability=p, duration=duration)
     return {
         "date": date,
         "location": location,

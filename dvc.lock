@@ -1,94 +1,183 @@
 schema: '2.0'
 stages:
   make_dataset:
-    cmd: python -m src.data.make_dataset
+    cmd: python -m src.data_preprocessing.make_dataset
     deps:
-    - path: data/raw/weatherAUS.csv
+    - path: data/raw/weather.parquet
       hash: md5
-      md5: a65cf8b8719b1a65db4f361eeec18457
-      size: 14094055
-    - path: src/data/make_dataset.py
+      md5: 2ec4f2b21ee88f9f8d734121443195d5
+      size: 2416952
+    - path: src/core/config.py
       hash: md5
-      md5: d7d66e4b0c3bf726ca4fb0c1047a9748
-      size: 933
+      md5: 5a97151f897c14c18bf6aee4489e4340
+      size: 2031
+      isexec: true
+    - path: src/core/settings.py
+      hash: md5
+      md5: cf302933cd55f2dfe9a311afb162e446
+      size: 15804
+      isexec: true
+    - path: src/data_preprocessing/make_dataset.py
+      hash: md5
+      md5: 9bde86d4f4cab04b7c4cd1a0d1e219f5
+      size: 2925
+      isexec: true
     - path: src/features/build_features.py
       hash: md5
-      md5: 04265204a5e20f88e0553831f2fe2066
-      size: 34838
+      md5: a9dfd121122422d9b6c2201f50fece5d
+      size: 49630
+      isexec: true
+    params:
+      params.yml:
+        preprocessing:
+          missing_threshold: 0.5
+        split:
+          strategy: temporal
+          test_size: 0.2
+          random_state: 42
     outs:
     - path: data/processed/dataset.joblib
       hash: md5
-      md5: 662cf07e19d0bedebaf5ae7b133c9374
-      size: 49203875
+      md5: 3dcd35320ae50fc57be6b318f635cb6d
+      size: 49204547
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 39136180fdf4a1c0fae1da15f3415815
-      size: 1765
+      md5: 19d1bbe3932d1a3688d85d70dd6fad49
+      size: 1805
   grid_search:
     cmd: python -m src.models.grid_search
     deps:
     - path: data/processed/dataset.joblib
       hash: md5
-      md5: 662cf07e19d0bedebaf5ae7b133c9374
-      size: 49203875
+      md5: 3dcd35320ae50fc57be6b318f635cb6d
+      size: 49204547
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 39136180fdf4a1c0fae1da15f3415815
-      size: 1765
+      md5: 19d1bbe3932d1a3688d85d70dd6fad49
+      size: 1805
+    - path: src/core/settings.py
+      hash: md5
+      md5: cf302933cd55f2dfe9a311afb162e446
+      size: 15804
+      isexec: true
     - path: src/models/grid_search.py
       hash: md5
-      md5: 6e978ab4ef07f0290bb1a32d8ceed81a
-      size: 1271
+      md5: 82c9d946611023acfe00cb682c766c56
+      size: 3514
+      isexec: true
     outs:
     - path: models/best_params.joblib
       hash: md5
-      md5: 27a9c24a462b351fe2fa5e8eb9046f62
+      md5: 089b594f0ef79da53878dfa060c5a876
       size: 62
   train_model:
     cmd: python -m src.models.train_model
     deps:
     - path: data/processed/dataset.joblib
       hash: md5
-      md5: 662cf07e19d0bedebaf5ae7b133c9374
-      size: 49203875
+      md5: 3dcd35320ae50fc57be6b318f635cb6d
+      size: 49204547
     - path: models/best_params.joblib
       hash: md5
-      md5: 27a9c24a462b351fe2fa5e8eb9046f62
+      md5: 089b594f0ef79da53878dfa060c5a876
       size: 62
     - path: models/preprocessor.joblib
       hash: md5
-      md5: 39136180fdf4a1c0fae1da15f3415815
-      size: 1765
+      md5: 19d1bbe3932d1a3688d85d70dd6fad49
+      size: 1805
+    - path: src/core/metadata.py
+      hash: md5
+      md5: 9975e81e12ba3b0fc8062e0c467dba51
+      size: 5110
+      isexec: true
+    - path: src/core/settings.py
+      hash: md5
+      md5: cf302933cd55f2dfe9a311afb162e446
+      size: 15804
+      isexec: true
     - path: src/models/train_model.py
       hash: md5
-      md5: fb0c5e428b7d8c7097979c9e64e8476b
-      size: 1092
+      md5: d1e477a0b694dd7855508e469b853903
+      size: 13038
+      isexec: true
     outs:
-    - path: models/model.joblib
+    - path: models/candidate_model.joblib
       hash: md5
-      md5: cc5bfefc72142f858568e3b70dcd2ec4
-      size: 6970095
+      md5: 50026f56ae21aea067640653693017c6
+      size: 6978382
   evaluate_model:
     cmd: python -m src.models.evaluate_model
     deps:
     - path: data/processed/dataset.joblib
       hash: md5
-      md5: 662cf07e19d0bedebaf5ae7b133c9374
-      size: 49203875
-    - path: models/model.joblib
+      md5: 3dcd35320ae50fc57be6b318f635cb6d
+      size: 49204547
+    - path: models/candidate_model.joblib
       hash: md5
-      md5: cc5bfefc72142f858568e3b70dcd2ec4
-      size: 6970095
+      md5: 50026f56ae21aea067640653693017c6
+      size: 6978382
+    - path: src/core/settings.py
+      hash: md5
+      md5: cf302933cd55f2dfe9a311afb162e446
+      size: 15804
+      isexec: true
     - path: src/models/evaluate_model.py
       hash: md5
-      md5: de5ed1373dba764c1711ff4ff3c5f111
-      size: 2380
+      md5: 7f91db2d2e48763a9f0e06127dae2e2c
+      size: 18695
+      isexec: true
+    params:
+      params.yml:
+        evaluation:
+          primary_metric: f1
+          threshold: 0.5
+        mlflow:
+          experiment_name: WeatherAUS
+          model_name: rain_prediction
     outs:
     - path: data/predictions.csv
       hash: md5
-      md5: 98d55842ac13dbcea1aedbaf48601e38
-      size: 643293
+      md5: dea72138966fad15f4c1f504edd8ebc8
+      size: 615092
     - path: metrics/scores.json
       hash: md5
-      md5: 849465ce243add436ce82c0b655e2138
-      size: 214
+      md5: fd76c69ebc79e2a666644d4e92ed82f9
+      size: 331
+  export_dataset:
+    cmd: python -m src.features.export_dataset
+    deps:
+    - path: src/core/config.py
+      hash: md5
+      md5: 5a97151f897c14c18bf6aee4489e4340
+      size: 2031
+      isexec: true
+    - path: src/core/settings.py
+      hash: md5
+      md5: cf302933cd55f2dfe9a311afb162e446
+      size: 15804
+      isexec: true
+    - path: src/features/build_features.py
+      hash: md5
+      md5: a9dfd121122422d9b6c2201f50fece5d
+      size: 49630
+      isexec: true
+    - path: src/features/export_dataset.py
+      hash: md5
+      md5: 2122e020222f58ce3c88d0b2c86ee1f8
+      size: 11994
+      isexec: true
+    params:
+      params.yml:
+        api:
+          url: http://localhost:8057/meteo
+        csv:
+          path: data/raw/weatherAUS.csv
+        dataset:
+          source: postgres
+        postgres:
+          table: weather_data_raw
+    outs:
+    - path: data/raw/weather.parquet
+      hash: md5
+      md5: 2ec4f2b21ee88f9f8d734121443195d5
+      size: 2416952
