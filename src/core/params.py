@@ -8,20 +8,20 @@ def _resolve_params_file() -> Path:
 
     candidates = []
 
-    # 1. Chemin explicite ?ventuel
+    # 1. Chemin explicite éventuel
     env_path = os.getenv("PARAMS_FILE")
     if env_path:
         candidates.append(Path(env_path))
 
-    # 2. Ex?cution depuis la racine du d?p?t
+    # 2. Exécution depuis la racine du dépôt
     candidates.append(Path.cwd() / "params.yml")
 
-    # 3. Images Docker o? params.yml est copi? ? c?t? du package parent
+    # 3. Images Docker où params.yml est copié à coté du package parent
     candidates.append(
         Path(__file__).resolve().parent.parent / "params.yml"
     )
 
-    # 4. Structure du d?p?t : <repo>/src/core/params.py -> <repo>/params.yml
+    # 4. Structure du dépôt : <repo>/src/core/params.py -> <repo>/params.yml
     candidates.append(
         Path(__file__).resolve().parents[2] / "params.yml"
     )
@@ -33,7 +33,7 @@ def _resolve_params_file() -> Path:
     checked = "\n - ".join(str(p) for p in candidates)
 
     raise FileNotFoundError(
-        "params.yml introuvable. Chemins test?s :\n - " + checked
+        "params.yml introuvable. Chemins testés :\n - " + checked
     )
 
 

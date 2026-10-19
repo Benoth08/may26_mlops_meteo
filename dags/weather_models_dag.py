@@ -12,7 +12,6 @@ import os
 
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 
 from datetime import datetime, timedelta
 from docker.types import Mount
@@ -47,6 +46,15 @@ mounts = [
         type="bind",
     )
 ]
+
+# Copie figée des artefacts du preprocessing, propre à ce run : le DAG
+# weather_preprocessing peut réécrire dataset.joblib pendant l'entraînement.
+RUN_DIR = "/data/processed/runs/{{ run_id }}"
+RUN_ARTIFACTS_ENV = {
+    "WEATHER_DATASET_PATH": RUN_DIR + "/dataset.joblib",
+    "WEATHER_PREPROCESSOR_PATH": RUN_DIR + "/preprocessor.joblib",
+    "WEATHER_RAW_DATASET_PATH": RUN_DIR + "/weather.parquet",
+}
 
 
 def log_models_failure(context):
@@ -110,6 +118,41 @@ with DAG(
         }
     )
 
+
+    snapshot_dataset = DockerOperator(
+        task_id="snapshot_dataset",
+        image=SETTINGS["docker"]["models_image"],
+        command=[
+            "bash", "-c",
+            "set -e; "
+            "[ -f /data/processed/dataset.joblib ] || exit 99; "
+            f'mkdir -p "{RUN_DIR}"; '
+            f'cp /data/processed/dataset.joblib "{RUN_DIR}/"; '
+            f'cp /models/preprocessor.joblib "{RUN_DIR}/"; '
+            f'cp /data/raw/weather.parquet "{RUN_DIR}/"',
+        ],
+        pool="ml_pool",
+        mounts=mounts,
+        skip_on_exit_code=99,
+        auto_remove="force",
+        docker_url="unix:///var/run/docker.sock",
+        network_mode="weather",
+        mount_tmp_dir=False,
+    )
+
+    cleanup_snapshot = DockerOperator(
+        task_id="cleanup_snapshot",
+        image=SETTINGS["docker"]["models_image"],
+        command=["bash", "-c", f'rm -rf "{RUN_DIR}"'],
+        trigger_rule="all_done",
+        mounts=mounts,
+        auto_remove="force",
+        docker_url="unix:///var/run/docker.sock",
+        network_mode="weather",
+        mount_tmp_dir=False,
+    )
+
+
     # Recherche des hyperparametres
     # GridSearch avec validation croisée temporelle
 
@@ -127,6 +170,7 @@ with DAG(
         mem_limit="4g",
         cpus=2,
         environment={
+            **RUN_ARTIFACTS_ENV,
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
@@ -166,6 +210,7 @@ with DAG(
         mem_limit="4g",
         cpus=2,
         environment={
+            **RUN_ARTIFACTS_ENV,
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
@@ -212,6 +257,7 @@ with DAG(
         mem_limit="4g",
         cpus=2,
         environment={
+            **RUN_ARTIFACTS_ENV,
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
@@ -256,6 +302,7 @@ with DAG(
         mem_limit="4g",
         cpus=2,
         environment={
+            **RUN_ARTIFACTS_ENV,
             "MLFLOW_TRACKING_URI": "{{ var.value.MLFLOW_TRACKING_URI }}",
             "MLFLOW_TRACKING_USERNAME": "{{ var.value.MLFLOW_TRACKING_USERNAME }}",
             "MLFLOW_TRACKING_PASSWORD": "{{ var.value.MLFLOW_TRACKING_PASSWORD }}",
@@ -297,4 +344,4 @@ with DAG(
     # -----------------------------------------
     # Orchestration
     # -----------------------------------------
-    grid_search >> train_model >> evaluate_model >> promotion_model
+    snapshot_dataset >> grid_search >> train_model >> evaluate_model >> promotion_model >> cleanup_snapshot

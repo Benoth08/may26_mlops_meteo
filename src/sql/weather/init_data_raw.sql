@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS weather_data_raw (
     -- Champs d’audit ajoutés par le task d’import
     date_import TIMESTAMPTZ,
     data_source TEXT,
-	run_id TEXT
+    run_id TEXT
 );
 
 -- 

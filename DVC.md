@@ -20,7 +20,7 @@ data/raw/weatherAUS.csv (suivi par dvc add)
         │
         ▼
   ┌───────────────┐
-  │ make_dataset  │  src/data/make_dataset.py + src/features/build_features.py
+  │ make_dataset  │  src/data_preprocessing/make_dataset.py + src/features/build_features.py
   └───────────────┘
         │  outs: data/processed/dataset.joblib, models/preprocessor.joblib
         ├──────────────────────┐
@@ -33,13 +33,13 @@ data/raw/weatherAUS.csv (suivi par dvc add)
   ┌───────────────┐
   │ train_model   │  src/models/train_model.py
   └───────────────┘
-        │  outs: models/model.joblib
+        │  outs: models/candidate_model.joblib
         ▼
   ┌────────────────┐
   │ evaluate_model  │  src/models/evaluate_model.py
   └────────────────┘
         outs: data/predictions.csv
-        metrics: metrics/scores.json (suivi directement par Git, cache: false)
+        metrics: metrics/candidate_scores.json (suivi directement par Git, cache: false)
 ```
 
 Voir `dvc.yaml` pour la définition exacte (commande, `deps`, `outs` de chaque stage) et `dvc.lock` pour les hash figés de la dernière exécution.

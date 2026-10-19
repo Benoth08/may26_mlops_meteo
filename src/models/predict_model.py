@@ -22,14 +22,16 @@ from core.logger import get_logger
 from core.settings import SETTINGS
 for _env_key, _env_val in SETTINGS["threads"].items():
     os.environ.setdefault(_env_key, str(_env_val))
-from core.metadata import NUMERIC_COLUMNS, TARGET, TECHNICAL_COLUMNS, normalize_column_name, normalize_data
+from core.metadata import NUMERIC_COLUMNS, TARGET, TECHNICAL_COLUMNS
 
 from build_features import (
     encode_rain_today, parse_date_column, add_temporal_features,
     add_cyclical_features, encode_wind_directions, add_weather_features, drop_unused_columns
 )
 
+from core.params import load_params
 
+PREDICTION_THRESHOLD = float(load_params()["evaluation"]["threshold"])
 
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 
@@ -86,5 +88,5 @@ def predict(df_raw, model=None):
         model = load_model()
     X = featurize(df_raw)
     proba = model.predict_proba(X)[:, 1]
-    pred = (proba >= 0.5).astype(int)
+    pred = (proba >= PREDICTION_THRESHOLD).astype(int)
     return pred, proba

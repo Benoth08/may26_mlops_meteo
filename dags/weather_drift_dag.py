@@ -10,9 +10,11 @@
     une fois les seuils calés sur des mesures réelles.
 ===============================================================================
 """
+import os
+
 from airflow import DAG
 from airflow.exceptions import AirflowException
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
 from airflow.providers.docker.operators.docker import DockerOperator
 
 from datetime import datetime, timedelta
@@ -137,16 +139,17 @@ with DAG(
         task_id="detect_drift",
         image=SETTINGS["docker"]["monitoring_image"],
         command="python monitoring/drift_detection.py",
-        pool="weather_pool",
+        pool="ml_pool",
+        skip_on_exit_code=99,
         mounts=mounts,
         mem_limit="4g",
         cpus=2,
         environment={
-            "POSTGRES_WTH_DB": "{{ var.value.POSTGRES_WTH_DB }}",
-            "POSTGRES_WTH_USER": "{{ var.value.POSTGRES_WTH_USER }}",
-            "POSTGRES_WTH_PASSWORD": "{{ var.value.POSTGRES_WTH_PASSWORD }}",
-            "POSTGRES_WTH_HOST": "{{ var.value.POSTGRES_WTH_HOST }}",
-            "POSTGRES_WTH_PORT": "{{ var.value.POSTGRES_WTH_PORT }}",
+            "POSTGRES_WTH_HOST": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).host }}",
+            "POSTGRES_WTH_PORT": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).port }}",
+            "POSTGRES_WTH_DB": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).schema }}",
+            "POSTGRES_WTH_USER": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).login }}",
+            "POSTGRES_WTH_PASSWORD": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).password }}",
             # Taille des deux fenetres comparees, en jours
             "DRIFT_WINDOW_DAYS": "{{ var.value.DRIFT_WINDOW_DAYS }}",
             # Part de colonnes derivees declenchant l'alerte
@@ -155,6 +158,12 @@ with DAG(
             "DRIFT_COLUMN_THRESHOLD": "{{ var.value.DRIFT_COLUMN_THRESHOLD }}",
             # Hausse du taux de valeurs manquantes declenchant l'alerte qualite
             "QUALITY_MISSING_INCREASE": "{{ var.value.QUALITY_MISSING_INCREASE }}",
+            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+            "WEATHER_HOST_MODELS_DIR": os.environ["WEATHER_HOST_MODELS_DIR"],
+            "WEATHER_HOST_METRICS_DIR": os.environ["WEATHER_HOST_METRICS_DIR"],
         },
         auto_remove="force",
         docker_url="unix:///var/run/docker.sock",
@@ -170,6 +179,7 @@ with DAG(
     alerte_surveillance = PythonOperator(
         task_id="alerte_surveillance",
         python_callable=controler_surveillance,
+        retries=0
     )
 
     # Orchestration

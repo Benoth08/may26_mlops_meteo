@@ -13,9 +13,7 @@
 ===============================================================================
 """
 
-import argparse
 import json
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -375,7 +373,7 @@ def save_ml_data_to_postgres(
     en JSONB (1 ligne = 1 observation), avec la cible associée si disponible.
 
     """
-    from sqlalchemy import create_engine
+    from sqlalchemy import create_engine, text
     from sqlalchemy.dialects.postgresql import JSONB
 
     required_keys = ("X_train_scaled", "X_test_scaled")
@@ -406,15 +404,19 @@ def save_ml_data_to_postgres(
         "run_id": run_id,
     })
 
-    all_records.to_sql(
-        table_name,
-        engine,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=1000,
-        dtype={"features": JSONB},
-    )
+    # Une seule version des features est conservée : la table est vidée dans
+    # la même transaction que l'insertion (sinon croissance illimitée).
+    with engine.begin() as connection:
+        connection.execute(text(f"TRUNCATE TABLE {table_name}"))
+        all_records.to_sql(
+            table_name,
+            connection,
+            if_exists="append",
+            index=False,
+            method="multi",
+            chunksize=1000,
+            dtype={"features": JSONB}
+        )
 
     logger.info({"event": "insert_completed", "table": table_name, "rows": len(all_records)})
 
@@ -446,7 +448,7 @@ def main() -> None:
         sys.exit(SKIP_EXIT_CODE)
 
     try:
-        logger.info({"event": "normalize_data_saving", "connection_uri": connstring, "table_name": SETTINGS["postgres"]["table_features"]})
+        logger.info({"event": "normalize_data_saving", "host": cfg.host, "db": cfg.db, "table_name": SETTINGS["postgres"]["table_features"]})
      
         save_ml_data_to_postgres(
             result,

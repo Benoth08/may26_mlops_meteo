@@ -21,8 +21,6 @@ import os
 
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.sdk.bases.hook import BaseHook
-from airflow.sdk import Variable
 
 from datetime import datetime, timedelta
 from docker.types import Mount
@@ -56,18 +54,25 @@ mounts = [
     )
 ]
 
-WEATHER_POSTGRES_CONN_ID = Variable.get(
-    "WEATHER_POSTGRES_CONN_ID",
-    default="weather_postgres",
-)
+# Identifiants rendus par Jinja au moment de l'exécution, jamais au parsing :
+# ils ne sont ni sérialisés avec le DAG, ni relus en base à chaque parsing.
+# export_dataset.py se rabat sur load_postgres_config() sans POSTGRES_URI.
+POSTGRES_ENV = {
+    "POSTGRES_WTH_HOST": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).host }}",
+    "POSTGRES_WTH_PORT": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).port }}",
+    "POSTGRES_WTH_DB": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).schema }}",
+    "POSTGRES_WTH_USER": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).login }}",
+    "POSTGRES_WTH_PASSWORD": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).password }}",
+}
 
-conn = BaseHook.get_connection(WEATHER_POSTGRES_CONN_ID)
-postgres_uri = (
-    f"postgresql+psycopg2://"
-    f"{conn.login}:{conn.password}@"
-    f"{conn.host}:{conn.port}/"
-    f"{conn.schema}"
-)
+COMMON_ENV = {
+    "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
+    "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+    "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
+    "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
+    "WEATHER_HOST_MODELS_DIR": os.environ["WEATHER_HOST_MODELS_DIR"],
+    "WEATHER_HOST_METRICS_DIR": os.environ["WEATHER_HOST_METRICS_DIR"],
+}
 
 # -----------------------------
 # CALLBACK ERREUR
@@ -119,6 +124,7 @@ with DAG(
     start_date=datetime(2026, 7, 5),
     schedule="*/20 * * * *",
     catchup=False,
+    max_active_runs=1,
     tags=["mlops26", "weather", "data-preprocessing"],
 ) as dag:
 
@@ -147,17 +153,8 @@ with DAG(
         # Limites CPU & RAM
         mem_limit="2g",
         cpus=1,
-        environment={
-            "POSTGRES_URI": postgres_uri,
-            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
-            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
-            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
-            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
-            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"], 
-            "WEATHER_HOST_METRICS_DIR":os.environ["WEATHER_HOST_METRICS_DIR"],
-        },
-
-        docker_url="unix://var/run/docker.sock",
+        environment={**POSTGRES_ENV, **COMMON_ENV},
+        docker_url="unix:///var/run/docker.sock",
         network_mode="weather",
         mounts=mounts,
         auto_remove="force",
@@ -188,15 +185,7 @@ with DAG(
         # Limites CPU & RAM
         mem_limit="2g",
         cpus=1,
-        environment={
-            "POSTGRES_URI": postgres_uri,
-            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
-            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
-            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
-            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
-            "WEATHER_HOST_MODELS_DIR":os.environ["WEATHER_HOST_MODELS_DIR"], 
-            "WEATHER_HOST_METRICS_DIR":os.environ["WEATHER_HOST_METRICS_DIR"],
-        },
+        environment={**POSTGRES_ENV, **COMMON_ENV},
         docker_url="unix:///var/run/docker.sock",
         network_mode="weather",
         mounts=mounts,
@@ -229,22 +218,7 @@ with DAG(
         # Limites CPU & RAM
         mem_limit="2g",
         cpus=1,
-        environment={
-            "POSTGRES_URI": postgres_uri,
-            # normalize_data.py appelle load_postgres_config() (core/config.py),
-            # qui lit ces variables individuelles et non POSTGRES_URI.
-            "POSTGRES_WTH_HOST": conn.host,
-            "POSTGRES_WTH_PORT": str(conn.port),
-            "POSTGRES_WTH_DB": conn.schema,
-            "POSTGRES_WTH_USER": conn.login,
-            "POSTGRES_WTH_PASSWORD": conn.password,
-            "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
-            "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
-            "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],
-            "WEATHER_HOST_LOGS_DIR": os.environ["WEATHER_HOST_LOGS_DIR"],
-            "WEATHER_HOST_MODELS_DIR": os.environ["WEATHER_HOST_MODELS_DIR"],
-            "WEATHER_HOST_METRICS_DIR": os.environ["WEATHER_HOST_METRICS_DIR"],
-        },
+        environment={**POSTGRES_ENV, **COMMON_ENV},
         auto_remove="force",
         docker_url="unix:///var/run/docker.sock",
         network_mode="weather",

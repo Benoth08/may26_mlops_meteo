@@ -7,7 +7,6 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -25,7 +24,6 @@ COPY src/core/ /app/data_preprocessing/core/
 COPY src/features/ /app/data_preprocessing/
 COPY src/data_preprocessing /app/data_preprocessing/
 COPY params.yml /app/data_preprocessing/params.yml
-COPY data/ /data/
 
 # Entrypoint par défaut
 CMD ["bash"]

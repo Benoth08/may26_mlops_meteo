@@ -32,13 +32,18 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
             "log_module": record.module,
             "log_function": record.funcName,
             "line": record.lineno,
             "process": record.process,
             "thread": record.threadName,
         }
+
+        if isinstance(record.msg, dict) and not record.args:
+            log_record["message"] = str(record.msg.get("event", ""))
+            log_record["data"] = record.msg
+        else:
+            log_record["message"] = record.getMessage()
 
         if record.exc_info:
             log_record["exception"] = self.formatException(record.exc_info)

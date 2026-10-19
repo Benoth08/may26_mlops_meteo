@@ -22,6 +22,7 @@
 """
 
 import json
+import os
 import uuid
 import time
 import random
@@ -31,9 +32,8 @@ import pandas as pd
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-from core.logger import get_logger
 from core.settings import SETTINGS
+from core.logger import get_logger
 
 
 class WeatherRawDataProducer:
@@ -70,6 +70,10 @@ class WeatherRawDataProducer:
             ","
         )
         self.data = None
+
+        # Prochain batch à produire, conservé entre deux runs du DAG
+        self.state_file = self.raw_directory / "producer_state.json"
+
 
     # ======================================================
     # Création du fichier configuration simulation
@@ -147,6 +151,18 @@ class WeatherRawDataProducer:
             f"{batch_number:05d}.csv"
         )
 
+    def _read_next_batch(self) -> int:
+        if self.state_file.exists():
+            try:
+                state = json.loads(self.state_file.read_text(encoding="utf-8"))
+                return int(state["next_batch"])
+            except (ValueError, KeyError, json.JSONDecodeError):
+                self.logger.warning({"event": "producer_state_invalid", "file": str(self.state_file)})
+        return 1
+
+    def _write_next_batch(self, next_batch: int) -> None:
+        self.state_file.write_text(json.dumps({"next_batch": next_batch}), encoding="utf-8")
+
 
     # ==========================================================
     # Lancement production des batches
@@ -154,7 +170,7 @@ class WeatherRawDataProducer:
     def run(
         self,
         batch_size=None,
-        start_batch=1,
+        start_batch=None,
         max_batches=None,
         delay=None
     ):
@@ -168,6 +184,9 @@ class WeatherRawDataProducer:
                 batch_size
                 or self.default_batch_size
             )
+
+            if start_batch is None:
+                start_batch = self._read_next_batch()
 
             delay = (
                 delay
@@ -189,7 +208,8 @@ class WeatherRawDataProducer:
             generated = 0
             generated_files = []
             current_batch = start_batch
-            
+            last_batch = None
+
             while True:
                 start_index = (current_batch - 1)*batch_size
                 end_index = start_index+batch_size
@@ -205,14 +225,15 @@ class WeatherRawDataProducer:
 
                 output_file = self.raw_directory / filename
             
-                batch.to_csv(
-                    output_file,
-                    index=False,
-                    encoding="utf-8"
-                )
+                # Écriture atomique : le sensor d'intégration ne doit jamais
+                # verrouiller un CSV à moitié écrit (.tmp est ignoré par le DAG).
+                tmp_file = output_file.with_name(output_file.name + ".tmp")
+                batch.to_csv(tmp_file, index=False, encoding="utf-8")
+                os.replace(tmp_file, output_file)
 
                 generated_files.append(filename)
                 generated += 1
+                last_batch = current_batch
 
                 self.logger.info({
                     "event": "batch_created",
@@ -245,6 +266,8 @@ class WeatherRawDataProducer:
 
                     time.sleep(random_delay * 60)
 
+            if last_batch is not None:
+                self._write_next_batch(last_batch + 1)
 
             # ==================================================
             # Création config uniquement si succès

@@ -59,7 +59,6 @@ from datetime import datetime, timedelta
 from docker.types import Mount
 from pathlib import Path
 
-from core.logger import SETTINGS # pyright: ignore[reportMissingImports]
 from core.settings import SETTINGS # pyright: ignore[reportMissingImports]
 
 # Logger Airflow

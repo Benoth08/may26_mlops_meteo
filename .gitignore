@@ -18,6 +18,7 @@ config/variables.json
 # Seul le résumé des métriques (petit JSON) est suivi directement par Git
 /metrics/*
 !/metrics/scores.json
+!/metrics/candidate_scores.json
 
 # --- Artefacts ML & données (partout) ---
 *.pkl
@@ -31,3 +32,9 @@ data/raw/*.parquet
 data/raw/config_*.json
 
 .venv312/
+
+# --- Éditeur ---
+.vscode/
+*.code-workspace
+
+models/candidate_info.json

@@ -48,9 +48,8 @@ x-airflow-common:
     
     #AUTH
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__CORE__FERNET_KEY: ''
- 
-          
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+
     # DATABASE
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_AIRF_USER}:${POSTGRES_AIRF_PASSWORD}@postgres-airflow/${POSTGRES_AIRF_DB}
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_AIRF_USER}:${POSTGRES_AIRF_PASSWORD}@postgres-airflow/${POSTGRES_AIRF_DB}
@@ -346,6 +345,7 @@ services:
         /entrypoint airflow pools set default_pool 4 "Default pool for general tasks"
         /entrypoint airflow pools set weather_pool 2 "Pool for weather ingestion tasks"
         /entrypoint airflow pools set ml_pool 2 "Pool for ML tasks"
+        /entrypoint airflow pools set producer_pool 1 "Pool for raw data producer"
         echo "Pools created."
         echo
         /entrypoint airflow connections delete weather_postgres || true
@@ -415,7 +415,7 @@ services:
     mem_limit: 256m
     cpus: 0.5
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_WTH_USER}
       POSTGRES_PASSWORD: ${POSTGRES_WTH_PASSWORD}
@@ -475,7 +475,8 @@ services:
       
   # Container : data-integration
   data-integration:
-    image: data-integration:${WEATHER_INTEGRATION_IMAGE_TAG}
+    image: data-integration:${WEATHER_INTEGRATION_IMAGE_TAG:-latest}
+    profiles: ["tasks"]
     build:
       context: .
       dockerfile: ./src/dockerfiles/data_integration/Dockerfile
@@ -491,8 +492,6 @@ services:
       POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
       POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
     depends_on:
-      airflow-apiserver:
-        condition: service_healthy
       postgres-weather:
         condition: service_healthy
     networks:
@@ -503,7 +502,8 @@ services:
 
   # Container : data-preprocessing
   data-preprocessing:
-    image: data-preprocessing:${WEATHER_PREPROCESSING_IMAGE_TAG}
+    image: data-preprocessing:${WEATHER_PREPROCESSING_IMAGE_TAG:-latest}
+    profiles: ["tasks"]
     build:
       context: .
       dockerfile: ./src/dockerfiles/data_preprocessing/Dockerfile
@@ -521,8 +521,6 @@ services:
       POSTGRES_WTH_USER: ${POSTGRES_WTH_USER}
       POSTGRES_WTH_PASSWORD: ${POSTGRES_WTH_PASSWORD}
     depends_on:
-      airflow-apiserver:
-        condition: service_healthy
       postgres-weather:
         condition: service_healthy
     networks:
@@ -537,7 +535,8 @@ services:
   # Image de tache : construite ici, executee par Airflow via
   # DockerOperator (DAG weather_drift). Ne tourne pas en permanence.
   monitoring:
-    image: monitoring:${WEATHER_MONITORING_IMAGE_TAG}
+    image: monitoring:${WEATHER_MONITORING_IMAGE_TAG:-latest}
+    profiles: ["tasks"]
     build:
       context: .
       dockerfile: ./src/dockerfiles/monitoring/Dockerfile
@@ -549,9 +548,6 @@ services:
       OMP_NUM_THREADS: 1
       MKL_NUM_THREADS: 1
       NUMEXPR_NUM_THREADS: 1
-    depends_on:
-      airflow-apiserver:
-        condition: service_healthy
     networks:
       - weather
     volumes:
@@ -561,7 +557,8 @@ services:
       - ./logs:/logs
 
   models:
-    image: models:${WEATHER_MODELS_IMAGE_TAG}
+    image: models:${WEATHER_MODELS_IMAGE_TAG:-latest}
+    profiles: ["tasks"]
     build:
       context: .
       dockerfile: ./src/dockerfiles/models/Dockerfile
@@ -573,9 +570,6 @@ services:
       OMP_NUM_THREADS: 1
       MKL_NUM_THREADS: 1
       NUMEXPR_NUM_THREADS: 1
-    depends_on:
-      airflow-apiserver:
-        condition: service_healthy
     networks:
       - weather
     volumes:
@@ -606,7 +600,5 @@ networks:
     
 # Declaration des volumes
 volumes:
-  minio_data:
-  mlflow-postgres-db:
   airflow-postgres-db:
   weather-postgres-db:

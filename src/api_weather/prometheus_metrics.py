@@ -12,6 +12,7 @@ from prometheus_client import (
     make_asgi_app,
 )
 
+from constants import PREDICTION_THRESHOLD
 
 # ============================================================
 # HTTP / API
@@ -191,7 +192,7 @@ def record_predictions(predictions):
         MODEL_PREDICTIONS.labels(prediction="No").inc(no_count)
 
 def record_prediction(probability: float, duration: float):
-    prediction = "Yes" if probability >= 0.5 else "No"
+    prediction = "Yes" if probability >= PREDICTION_THRESHOLD else "No"
 
     record_predictions(prediction)
 
@@ -211,7 +212,7 @@ def record_batch(probabilities, duration: float):
         MODEL_INFERENCE_DURATION.observe(duration)
 
     record_predictions(
-        np.where(probabilities >= 0.5, "Yes", "No")
+        np.where(probabilities >= PREDICTION_THRESHOLD, "Yes", "No")
     )
 
     for probability in probabilities:
@@ -384,20 +385,10 @@ def setup_metrics(app):
                 - start_time
             )
 
-            route = request.scope.get(
-                "route"
-            )
-
-            if route is not None:
-                endpoint = getattr(
-                    route,
-                    "path",
-                    request.url.path,
-                )
-            else:
-                endpoint = (
-                    request.url.path
-                )
+            # Route inconnue (scan, 404) : label fixe, sinon chaque URL
+            # arbitraire crée une nouvelle série Prometheus.
+            route = request.scope.get("route")
+            endpoint = getattr(route, "path", "unmatched") if route is not None else "unmatched"
 
             HTTP_REQUESTS.labels(
                 method=request.method,

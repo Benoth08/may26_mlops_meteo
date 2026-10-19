@@ -25,12 +25,14 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Lint with flake8
       run: |
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 src dags tests --count --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       env:
         AIRFLOW_CONTAINER_DATA_DIR: /opt/airflow/data
         AIRFLOW_CONTAINER_LOGS_DIR: /opt/airflow/logs
+        WEATHER_DATA_DIR: ${{ runner.temp }}/data
+        WEATHER_MODELS_DIR: ${{ runner.temp }}/models
         WEATHER_HOST_DATA_DIR: /home/ubuntu/projet_weather/data
         WEATHER_HOST_LOGS_DIR: /home/ubuntu/projet_weather/logs
         WEATHER_HOST_MODELS_DIR: /home/ubuntu/projet_weather/models

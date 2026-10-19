@@ -31,8 +31,9 @@ logger = get_logger("grid_search")
 PROCESSED_DIR = Path(SETTINGS["paths"]["processed"])
 MODELS_DIR = Path(SETTINGS["paths"]["models"])
 
-DATASET_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
-PREPROCESSOR_PATH = (MODELS_DIR / SETTINGS["models"]["preprocessor"])
+# Surchargeables par le DAG weather_models (copie figée propre au run).
+DATASET_PATH = Path(os.getenv("WEATHER_DATASET_PATH", str(PROCESSED_DIR / SETTINGS["models"]["dataset"])))
+PREPROCESSOR_PATH = Path(os.getenv("WEATHER_PREPROCESSOR_PATH", str(MODELS_DIR / SETTINGS["models"]["preprocessor"])))
 BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
 
 # Code de sortie signalant à Airflow (DockerOperator.skip_on_exit_code) qu'il

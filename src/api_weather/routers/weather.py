@@ -4,7 +4,6 @@ Endpoints de consultation des données météo brutes stockées en base :
     GET /weather                1 paramètre météo pour une date et une station
     GET /weather/all-features   toutes les données météo pour une date et une station
 """
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from sqlalchemy import text
@@ -13,10 +12,9 @@ from sqlalchemy import text
 from core.logger import get_logger
 
 from auth import check_auth
-from constants import ALLOWED_FEATURES, TABLE_RAW, IMPORT_DATE_COLUMN, normalize_column_name
+from constants import ALLOWED_FEATURES, TABLE_RAW, IMPORT_DATE_COLUMN, normalize_column_name, to_raw_date
 from deps import (
-    check_model,
-    check_database,
+    ModelUnavailableError,
     get_engine,
     get_model,
 )
@@ -29,7 +27,8 @@ router = APIRouter(prefix="/weather", tags=["weather"])
     200: {"description": "OK"},
     500: {"description": "Erreur serveur"},
 })
-def get_weather_features():
+def get_weather_features(auth: bool = Depends(check_auth)):
+
     """Retourne la liste des paramètres météo autorisés."""
     try:
         _, metadata = get_model()
@@ -51,6 +50,8 @@ def get_weather_features():
             "locations_count": len(known_locations),
             "locations": known_locations
         }
+    except ModelUnavailableError: 
+        raise
     except Exception as e:
         logger.exception({
             "event": "weather_features_failed",
@@ -73,11 +74,12 @@ def get_weather(
     request: Request,
     date: str = Query(..., description="Date au format YYYY-MM-DD"),
     location: str = Query(..., description="Nom de la station météo"),
-    feature: str = Query("Rainfall", description="Nom de la colonne météo à consulter"),
+    feature: str = Query("rainfall", description="Nom de la colonne météo à consulter"),
     auth: bool = Depends(check_auth),
 ):
     """Retourne une donnée météo pour une date, une localisation et un paramètre donnés."""
-    if feature not in ALLOWED_FEATURES:
+    feature_norm = normalize_column_name(feature)
+    if feature_norm not in ALLOWED_FEATURES:
         raise HTTPException(
             status_code=400,
             detail={
@@ -88,7 +90,7 @@ def get_weather(
         )
 
     try:
-        datetime.strptime(date, "%Y-%m-%d")
+        date_raw = to_raw_date(date)
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -102,17 +104,13 @@ def get_weather(
     if engine is None:
         raise HTTPException(500, "Engine non initialisé")
 
-    feature_norm = normalize_column_name(feature)
     q = text(
         f"""
         SELECT {feature_norm}
         FROM {TABLE_RAW}
         WHERE date = :d
             AND location = :loc
-            AND {IMPORT_DATE_COLUMN} = (
-            SELECT MAX({IMPORT_DATE_COLUMN})
-            FROM {TABLE_RAW}
-        )
+        ORDER BY {IMPORT_DATE_COLUMN} DESC
         LIMIT 1;
         """
     )
@@ -120,9 +118,10 @@ def get_weather(
 
     try:
         with engine.connect() as conn:
-            row = conn.execute(q, {"d": date, "loc": location}).fetchone()
+            row = conn.execute(q, {"d": date_raw, "loc": location}).fetchone()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error({"event": "weather_query_failed", "error": str(e)}, exc_info=True)
+        raise HTTPException(status_code=500, detail="Erreur lors de la lecture des données météo.")
 
     if not row:
         raise HTTPException(
@@ -153,7 +152,7 @@ def get_weather_all_features(
 ):
     """Retourne tous les paramètres météo pour une date et une station données."""
     try:
-        datetime.strptime(date, "%Y-%m-%d")
+        date_raw = to_raw_date(date)
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -172,10 +171,7 @@ def get_weather_all_features(
         FROM {TABLE_RAW}
         WHERE date = :d
             AND location = :loc
-            AND {IMPORT_DATE_COLUMN} = (
-            SELECT MAX({IMPORT_DATE_COLUMN})
-            FROM {TABLE_RAW}
-        )
+        ORDER BY {IMPORT_DATE_COLUMN} DESC
         LIMIT 1;
         """
     )
@@ -183,11 +179,21 @@ def get_weather_all_features(
     if engine is None:
         raise HTTPException(500, "Engine non initialisé")
 
+    params = {"d": date_raw, "loc": location}
+    logger.info({
+        "event": "weather_all_features_query",
+        "sql": str(q.bindparams(**params).compile(engine, compile_kwargs={"literal_binds": True})),
+        "params": params,
+    })
+
     try:
         with engine.connect() as conn:
-            row = conn.execute(q, {"d": date, "loc": location}).fetchone()
+            row = conn.execute(q, params).fetchone()
     except Exception as e:
+        logger.error({"event": "weather_all_features_failed", "error": str(e)}, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+    logger.info({"event": "weather_all_features_result", "found": row is not None})
 
     if not row:
         raise HTTPException(

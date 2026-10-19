@@ -14,19 +14,14 @@ from constants import (
     TABLE_RAW,
     IMPORT_DATE_COLUMN,
     DB_COLUMNS,
-    NUMERIC_COLUMNS,
     TARGET,
-    COLUMN_CONSTRAINTS,
     REQUIRED_COLUMNS,
-    FEATURE_COLUMNS,
-    TECHNICAL_COLUMNS,
-    WIND_DIRECTION_COLUMNS,
-    CATEGORICAL_COLUMNS,
     normalize_column_name,
     normalize_data,
+    to_raw_date,
 )
 
-from deps import get_model, get_engine
+from deps import ModelUnavailableError, get_model, get_engine
 
 from build_features import (
     validate_schema, convert_types, encode_rain_today, parse_date_column, add_temporal_features,
@@ -35,11 +30,12 @@ from build_features import (
 
 logger = get_logger("inference")
 
-def validate_location(location: str) -> None:
+def validate_location(location: str, metadata: dict | None = None) -> None:
     """
     Vérifie que la station est connue du modèle.
     """
-    _, metadata = get_model()
+    if metadata is None:
+        _, metadata = get_model()
 
     known_locations = (
         metadata
@@ -54,7 +50,7 @@ def validate_location(location: str) -> None:
 
     key = location.strip()
     
-    if location not in known_locations:
+    if key not in known_locations:
         raise ValueError(
             f"Localisation inconnue : '{location}'. "
             f"{len(known_locations)} stations disponibles."
@@ -76,15 +72,13 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
         # suppression de la cible
         if TARGET in df.columns:
             df = df.drop(columns=[TARGET])
+
+        _, metadata = get_model()
         
         # validation station
         if "location" in df.columns:
             for location in df["location"].dropna().unique():
-                validate_location(location)
-        
-        
-        # validation schéma attendu par le modèle
-        _, metadata = get_model()
+                validate_location(location, metadata)
 
         expected_features = (
             metadata["features"]["numeric"]
@@ -92,7 +86,7 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
             metadata["features"]["categorical"]
         )
 
-        # Validation du sch?ma brut avant feature engineering
+        # Validation du schéma brut avant feature engineering
         raw_required_features = [
             col for col in REQUIRED_COLUMNS
             if col != TARGET
@@ -112,7 +106,7 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
             df_conv = add_weather_features(df_conv)
             df_conv = drop_unused_columns(df_conv)
 
-            # Validation apr?s feature engineering
+            # Validation après feature engineering
             validate_schema(df_conv, expected_features)
 
             # Respecter exactement l ordre des features du mod?le
@@ -121,6 +115,8 @@ def featurize(df_raw: pd.DataFrame) -> pd.DataFrame:
             return df_conv
         else:
             return pd.DataFrame()
+    except ModelUnavailableError: 
+        raise
     except Exception as e:
         logger.exception({
             "event": "featurization_failed",
@@ -160,7 +156,7 @@ def load_row_from_db(request: Request, date: str, location: str):
         f"ORDER BY {IMPORT_DATE_COLUMN} DESC LIMIT 1"
     )
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"d": date, "loc": location})
+        df = pd.read_sql(query, conn, params={"d": to_raw_date(date), "loc": location})
 
     if df.empty:
         return None, None

@@ -32,7 +32,7 @@ from pathlib import Path
 
 from core.logger import get_logger
 from core.settings import SETTINGS
-from core.config import load_postgres_config, ConfigError, PostgresConfig
+from core.config import PostgresConfig
 from core.helpers_dataframe import normalize_column
 
 
@@ -83,7 +83,9 @@ class WeatherDataLoader:
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            dest_path = archive_path / f"{src.stem}_{timestamp}{src.suffix}"
+            # weather_x.csv.processing -> weather_x_<timestamp>.csv
+            original = Path(src.name.removesuffix(".processing"))
+            dest_path = archive_path / f"{original.stem}_{timestamp}{original.suffix}"
 
             # Déplacement
             shutil.move(src, dest_path)
@@ -185,7 +187,7 @@ class WeatherDataLoader:
                 # Ajouter les champs techniques d'import               
                 chunk[field_importdate] = import_date
                 chunk[field_runid] = self.run_id
-                chunk[field_source] = csv_path
+                chunk[field_source] = str(csv_path).removesuffix(".processing")
     
                 # Normalisation des colonnes
                 chunk.columns = [normalize_column(col) for col in chunk.columns]

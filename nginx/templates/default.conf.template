@@ -143,6 +143,10 @@ server {
     # API
     # =================================================
 
+    location ^~ /metrics {
+        return 403;
+    }
+
     location / {
 
         limit_req

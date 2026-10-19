@@ -9,7 +9,6 @@ WORKDIR /app
 
 # Dépendances système & LightGBM
 RUN apt-get update && apt-get install -y \
-    build-essential \
     libgomp1 \
     ca-certificates \
     curl \

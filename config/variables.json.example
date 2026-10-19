@@ -3,11 +3,6 @@
   "MLFLOW_TRACKING_USERNAME": "",
   "MLFLOW_TRACKING_PASSWORD": "",
   "WEATHER_POSTGRES_CONN_ID": "weather_postgres",
-  "POSTGRES_WTH_HOST": "postgres-weather",
-  "POSTGRES_WTH_PORT": "5432",
-  "POSTGRES_WTH_DB": "weather",
-  "POSTGRES_WTH_USER": "weather",
-  "POSTGRES_WTH_PASSWORD": "CHANGE_ME",
   "DRIFT_WINDOW_DAYS": "30",
   "DRIFT_COLUMN_THRESHOLD": "0.30",
   "DRIFT_SHARE_THRESHOLD": "0.10",
@@ -16,7 +11,6 @@
   "WEATHER_RAW_PRODUCER_CONFIG": {
     "batch_size": 500,
     "max_batches": 5,
-    "delay": 5,
-    "start_batch": 1
+    "delay": 5
   }
 }

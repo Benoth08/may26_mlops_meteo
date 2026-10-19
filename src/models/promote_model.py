@@ -47,7 +47,6 @@ from core.config import load_postgres_config
 
 from training_state import TrainingStateRepository, build_engine
 
-
 # =============================================================================
 # LOGGER
 # =============================================================================
@@ -57,7 +56,11 @@ logger = get_logger("promote_model")
 # CONFIGURATION
 # =============================================================================
 REGISTERED_MODEL_NAME = SETTINGS["models"]["registered_model_name"]
-METRICS_FILE = Path(SETTINGS["paths"]["metrics"]) / SETTINGS["models"]["metrics"]
+METRICS_DIR = Path(SETTINGS["paths"]["metrics"])
+# Métriques du candidat (évaluation) et métriques du modèle servi (API/Grafana)
+METRICS_FILE = METRICS_DIR / SETTINGS["models"]["candidate_metrics"]
+SERVED_METRICS_FILE = METRICS_DIR / SETTINGS["models"]["metrics"]
+CANDIDATE_INFO_FILE = Path(SETTINGS["paths"]["models"]) / SETTINGS["models"]["candidate_info"]
 
 # Alias remplaçant le stage "Production" (déprécié, cf. docstring du module).
 CHAMPION_ALIAS = "champion"
@@ -136,22 +139,15 @@ def configure_mlflow() -> None:
 # =============================================================================
 # VERSIONS MLflow
 # =============================================================================
-def get_latest_version(client: MlflowClient):
+def get_candidate_version(client: MlflowClient):
     """
-    Récupère la version la plus récente enregistrée pour le modèle.
-
-    evaluate_model.py doit avoir enregistré cette version dans le
-    Model Registry (mlflow.sklearn.log_model(..., registered_model_name=...)).
+    Version MLflow enregistrée par evaluate_model.py pour CE run
+    (models/candidate_info.json). None si aucune évaluation n'a abouti.
     """
-
-    versions = client.search_model_versions(
-        f"name='{REGISTERED_MODEL_NAME}'"
-    )
-
-    if not versions:
+    if not CANDIDATE_INFO_FILE.exists():
         return None
-
-    return max(versions, key=lambda version: int(version.version))
+    info = json.loads(CANDIDATE_INFO_FILE.read_text(encoding="utf-8"))
+    return client.get_model_version(REGISTERED_MODEL_NAME, info["version"])
 
 
 def get_champion_version(client: MlflowClient):
@@ -218,9 +214,10 @@ def score_sur_jeu_de_test_courant(version, metric_name: str) -> float:
             f"Seule la metrique f1 est reevaluee ici, recue : {metric_name}"
         )
 
-    dataset_path = (
-        Path(SETTINGS["paths"]["processed"]) / SETTINGS["models"]["dataset"]
-    )
+    dataset_path = Path(os.getenv(
+        "WEATHER_DATASET_PATH",
+        str(Path(SETTINGS["paths"]["processed"]) / SETTINGS["models"]["dataset"]),
+    ))
 
     data = joblib.load(dataset_path)
     X_test, y_test = data["X_test"], data["y_test"]
@@ -228,7 +225,9 @@ def score_sur_jeu_de_test_courant(version, metric_name: str) -> float:
     uri = f"models:/{REGISTERED_MODEL_NAME}/{version.version}"
     modele = mlflow.sklearn.load_model(uri)
 
-    return float(f1_score(y_test, modele.predict(X_test)))
+    threshold = float(load_params()["evaluation"]["threshold"])
+    y_pred = (modele.predict_proba(X_test)[:, 1] >= threshold).astype(int)
+    return float(f1_score(y_test, y_pred))
 
 
 # =============================================================================
@@ -337,7 +336,17 @@ def deploy_candidate_to_serving() -> None:
 
     SERVING_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    shutil.copyfile(CANDIDATE_MODEL_PATH, SERVING_MODEL_PATH)
+    # Copie atomique : l'API recharge le modèle dès que le fichier change,
+    # elle ne doit jamais lire un fichier à moitié écrit.
+    tmp_model = SERVING_MODEL_PATH.with_name(SERVING_MODEL_PATH.name + ".tmp")
+    shutil.copyfile(CANDIDATE_MODEL_PATH, tmp_model)
+    os.replace(tmp_model, SERVING_MODEL_PATH)
+
+    # scores.json reflète désormais le modèle réellement servi.
+    if METRICS_FILE.exists():
+        tmp_metrics = SERVED_METRICS_FILE.with_name(SERVED_METRICS_FILE.name + ".tmp")
+        shutil.copyfile(METRICS_FILE, tmp_metrics)
+        os.replace(tmp_metrics, SERVED_METRICS_FILE)
 
     logger.info(
         {
@@ -427,7 +436,6 @@ def set_promotion_tags(
 # =============================================================================
 
 def record_training_attempt(
-    params: dict,
     promoted: bool,
     new_version,
     new_score: float,
@@ -449,9 +457,8 @@ def record_training_attempt(
     nouveau si promu, le champion actuel sinon).
     """
 
-    model_name = (
-        params.get("mlflow", {}).get("model_name", "rain_prediction")
-    )
+    model_name = REGISTERED_MODEL_NAME
+
     training_row_count = int(os.getenv("TRAINING_ROW_COUNT", "0"))
     training_reason = os.getenv("TRAINING_REASON", "manual")
 
@@ -489,6 +496,20 @@ def record_training_attempt(
             "status": "promoted" if promoted else "rejected",
         }
     )
+
+def record_attempt_without_promotion(status: str) -> None:
+    """Trace une tentative sans nouvelle version comparable (évite le re-trigger horaire)."""
+    try:
+        model_name = REGISTERED_MODEL_NAME
+        engine = build_engine(load_postgres_config().sqlalchemy_uri)
+        TrainingStateRepository(engine=engine).record_attempt(
+            model_name=model_name,
+            training_row_count=int(os.getenv("TRAINING_ROW_COUNT", "0")),
+            status=status,
+            training_reason=os.getenv("TRAINING_REASON", "manual"),
+        )
+    except Exception as error:
+        logger.error({"event": "training_status_update_failed", "error": str(error)}, exc_info=True)
 
 
 # =============================================================================
@@ -550,7 +571,7 @@ def main() -> None:
     # 3. Nouveau modèle
     # =========================================================================
     try:
-        new = get_latest_version(client)
+        new = get_candidate_version(client)
 
     except Exception as error:
         logger.error(
@@ -574,7 +595,7 @@ def main() -> None:
         )
 
         print("ℹ️ Aucune nouvelle version à promouvoir.")
-
+        record_attempt_without_promotion(status="no_candidate")
         return
 
     # =========================================================================
@@ -606,7 +627,7 @@ def main() -> None:
         )
 
         print("ℹ️ Aucune nouvelle version à promouvoir.")
-
+        record_attempt_without_promotion(status="no_candidate")
         return
 
     # =========================================================================
@@ -683,6 +704,9 @@ def main() -> None:
             )
             sys.exit(1)
 
+    f1_alert = os.getenv("F1_ALERT_THRESHOLD")
+    below_alert = bool(f1_alert) and primary_metric == "f1" and new_score < float(f1_alert)
+
     # =========================================================================
     # 8. Comparaison
     # =========================================================================
@@ -690,6 +714,9 @@ def main() -> None:
         new_score=new_score,
         champion_score=champion_score,
         min_score_improvement=min_score_improvement)
+
+    if below_alert:
+        promote, reason = False, "below_f1_alert_threshold"
 
     logger.info(
         {
@@ -717,9 +744,8 @@ def main() -> None:
     # =========================================================================
     if promote:
         try:
-            promote_version(client=client, version=new)
-
             deploy_candidate_to_serving()
+            promote_version(client=client, version=new)
 
             set_promotion_tags(
                 client=client,
@@ -777,8 +803,9 @@ def main() -> None:
         print(f"Version       : {new.version}")
         print(f"Métrique      : {primary_metric}")
         print(f"Nouveau score : {new_score:.4f}")
-        print(f"Score champion: {champion_score:.4f}")
-        print(f"Amélioration  : {improvement:.4f}")
+        if champion_score is not None:
+            print(f"Score champion: {champion_score:.4f}")
+            print(f"Amélioration  : {improvement:.4f}")
         print(f"Seuil minimum : {min_score_improvement:.4f}")
         print(f"Raison        : {reason}")
         print("Le modèle champion actuel reste inchangé")
@@ -789,13 +816,17 @@ def main() -> None:
     # =========================================================================
     try:
         record_training_attempt(
-            params=params,
             promoted=promote,
             new_version=new,
             new_score=new_score,
             champion=champion,
             champion_score=champion_score,
         )
+
+        if below_alert:
+            logger.error({"event": "f1_below_alert_threshold", "f1": new_score, "threshold": float(f1_alert)})
+            sys.exit(1)
+
 
     except Exception as error:
         # Un échec d'enregistrement de l'état d'entraînement ne doit pas

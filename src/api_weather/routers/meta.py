@@ -11,8 +11,8 @@ from sqlalchemy import text
 from core.logger import get_logger
 
 from auth import check_auth
-from constants import API_VERSION, API_NAME, TABLE_RAW, IMPORT_DATE_COLUMN, RUNID_COLUMN, SOURCE_COLUMN
-from deps import check_model, check_database, get_engine, get_model
+from constants import API_VERSION, API_NAME, TABLE_RAW, IMPORT_DATE_COLUMN, SOURCE_COLUMN
+from deps import ModelUnavailableError, check_model, check_database, get_engine, get_model
 
 logger = get_logger("api")
 
@@ -80,7 +80,7 @@ def get_last_import(request: Request, auth: bool = Depends(check_auth)):
     try:
         with engine.connect() as conn:
             row = conn.execute(q).fetchone()
-    except Exception as e:
+    except Exception :
         raise HTTPException(status_code=500, detail="Schéma des données invalide")
 
     if not row:
@@ -105,7 +105,7 @@ def get_last_import(request: Request, auth: bool = Depends(check_auth)):
         500: {"description": "Modèle indisponible ou erreur de chargement"},
     },
 )
-def get_model_metadata():
+def get_model_metadata(auth: bool = Depends(check_auth)):
     """
     Retourne les métadonnées du modèle actuellement utilisé par l'API.
     """
@@ -123,6 +123,8 @@ def get_model_metadata():
             "metadata": metadata,
         }
 
+    except ModelUnavailableError: 
+        raise
     except Exception as e:
         logger.error(
             {

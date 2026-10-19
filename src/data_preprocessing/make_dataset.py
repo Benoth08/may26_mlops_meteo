@@ -3,11 +3,9 @@
 Produit les splits train/test temporels + le préprocesseur NON entraîné."""
 
 import sys
-import json
 
 from core.logger import get_logger
 from core.settings import SETTINGS
-from core.config import load_postgres_config, ConfigError, PostgresConfig
 from build_features import prepare_data
 
 import joblib
@@ -41,7 +39,8 @@ def main():
         logger.error({"event": "Fichier non disponible", "path": str(RAWDATASET_INPUT_PATH)})
         sys.exit(1)
 
-    if pd.read_parquet(RAWDATASET_INPUT_PATH).empty:
+    raw_df = pd.read_parquet(RAWDATASET_INPUT_PATH)
+    if raw_df.empty:
         logger.warning({
             "event": "make_dataset_skipped",
             "message": "Dataset brut vide, aucun traitement effectué.",

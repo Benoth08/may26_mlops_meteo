@@ -12,13 +12,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from core.logger import get_logger
 
 from auth import check_auth
-from constants import MAX_BATCH_ROWS
+from constants import MAX_BATCH_ROWS, PREDICTION_THRESHOLD, normalize_data
 from inference import featurize, load_row_from_db, proba_of
 from schemas import WeatherInput
 from prometheus_metrics import (
     record_prediction,
     record_batch,
 )
+from deps import ModelUnavailableError
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
@@ -48,8 +49,9 @@ def predict(item: WeatherInput, auth: bool = Depends(check_auth)):
 
         record_prediction(probability=p, duration=duration)
 
-        return {"rain_tomorrow": "Yes" if p >= 0.5 else "No", "probability": round(p, 4)}
-    except HTTPException:
+        return {"rain_tomorrow": "Yes" if p >= PREDICTION_THRESHOLD else "No", "probability": round(p, 4)}
+
+    except (HTTPException, ModelUnavailableError):
         raise
     except ValueError as e:
         # Erreurs métier : localisation inconnue,
@@ -75,7 +77,7 @@ def predict(item: WeatherInput, auth: bool = Depends(check_auth)):
         )
 
 @router.post("/batch")
-async def predict_batch(file: UploadFile = File(...), auth: bool = Depends(check_auth)):
+def predict_batch(file: UploadFile = File(...), auth: bool = Depends(check_auth)):
     """Prédiction par lot : envoie un CSV de nouvelles observations (mêmes colonnes
     que weatherAUS), reçois une prédiction par ligne."""
     try:
@@ -92,9 +94,9 @@ async def predict_batch(file: UploadFile = File(...), auth: bool = Depends(check
     
     try:
         X = featurize(raw)
-    except KeyError as e:
-        raise HTTPException(400, f"Colonne manquante dans le CSV : {e}")
-
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, f"Données invalides : {e}")
+    
     if X.empty:
         raise HTTPException(400, "Aucune ligne exploitable (dates invalides ?).")
 
@@ -104,10 +106,14 @@ async def predict_batch(file: UploadFile = File(...), auth: bool = Depends(check
 
     record_batch(probabilities=p, duration=duration)
 
+    # featurize() normalise les noms de colonnes : on fait de même pour
+    # retrouver date / station, que le CSV soit en "Date" ou en "date".
+    raw_norm = normalize_data(raw.copy())
+
     out = pd.DataFrame({
-        "Date": raw.loc[X.index, "Date"].values,
-        "Location": raw.loc[X.index, "Location"].values,
-        "rain_tomorrow": np.where(p >= 0.5, "Yes", "No"),
+        "Date": raw_norm.loc[X.index, "date"].values,
+        "Location": raw_norm.loc[X.index, "location"].values,
+        "rain_tomorrow": np.where(p >= PREDICTION_THRESHOLD, "Yes", "No"),
         "probability": p.round(4),
     })
     return {"count": int(len(out)), "predictions": out.to_dict(orient="records")}
@@ -125,7 +131,12 @@ def predict_from_db(
     df, actual = load_row_from_db(request, date, location)
     if df is None:
         raise HTTPException(404, f"Aucune donnée pour {location} le {date}")
-    X = featurize(df)
+    
+    try:
+        X = featurize(df)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, f"Données invalides : {e}")
+        
     if X.empty:
         raise HTTPException(400, "Ligne écartée au prétraitement (date invalide).")
     start = time.perf_counter()
@@ -135,7 +146,7 @@ def predict_from_db(
     return {
         "date": date,
         "location": location,
-        "rain_tomorrow_pred": "Yes" if p >= 0.5 else "No",
+        "rain_tomorrow_pred": "Yes" if p >= PREDICTION_THRESHOLD else "No",
         "probability": round(p, 4),
         "rain_tomorrow_actual": actual,
     }

@@ -12,7 +12,6 @@
 
 from .settings import SETTINGS
 from .helpers_dataframe import (
-    get_all_columns,
     get_feature_columns,
     get_numeric_columns,
     get_columns_by_metadata,

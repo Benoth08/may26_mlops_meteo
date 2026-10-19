@@ -52,16 +52,12 @@ class TrainingStateRepository:
     ) -> int:
         """
         Retourne le nombre actuel de lignes du dataset.
-
-        Le nom de table doit rester contrôlé par la configuration
-        interne du projet et ne doit pas provenir directement
-        d'une entrée utilisateur.
         """
 
         query = text(
             f"""
             SELECT COUNT(*)
-            FROM {table_name}
+            FROM (SELECT DISTINCT date, location FROM {table_name}) AS t
             """
         )
 
@@ -178,6 +174,48 @@ class TrainingStateRepository:
                     "status": status,
                     "training_reason": training_reason,
                     "updated_at": now,
+                },
+            )
+
+    def record_attempt(
+        self,
+        model_name: str,
+        training_row_count: int,
+        status: str,
+        training_reason: Optional[str] = None,
+    ) -> None:
+        """
+        Enregistre une tentative d'entraînement sans modifier la version ni le
+        score déployés : empêche weather_training_trigger de relancer en boucle.
+        """
+        now = datetime.now(timezone.utc)
+        query = text(
+            """
+            INSERT INTO model_training_status (
+                model_name, last_training_date, last_training_row_count,
+                status, training_reason, updated_at
+            )
+            VALUES (
+                :model_name, :now, :row_count, :status, :training_reason, :now
+            )
+            ON CONFLICT (model_name)
+            DO UPDATE SET
+                last_training_date = EXCLUDED.last_training_date,
+                last_training_row_count = EXCLUDED.last_training_row_count,
+                status = EXCLUDED.status,
+                training_reason = EXCLUDED.training_reason,
+                updated_at = EXCLUDED.updated_at
+            """
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                query,
+                {
+                    "model_name": model_name,
+                    "now": now,
+                    "row_count": training_row_count,
+                    "status": status,
+                    "training_reason": training_reason,
                 },
             )
 
