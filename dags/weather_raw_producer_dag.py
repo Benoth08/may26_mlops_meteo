@@ -38,11 +38,9 @@ import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.sdk import Variable
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
-from core.logger import get_logger
 from core.settings import SETTINGS
 
 import logging
@@ -130,32 +128,7 @@ with DAG(
         }
     )
     
-    # -----------------------------------------
-    # Prerequis - Chargement variable Airflow
-    # Définit le rythme de générations des données brutes
-    # -----------------------------------------
-    #WEATHER_RAW_PRODUCER_CONFIG 
-    #{
-    #  "batch_size":500,
-    #  "max_batches":5,
-    #  "delay":5,
-    #  "start_batch":1
-    #}
-    producer_config = Variable.get("WEATHER_RAW_PRODUCER_CONFIG", default={}, deserialize_json=True)
-    batch_size = int(producer_config.get("batch_size", 500))
-    max_batches = int(producer_config.get("max_batches", 5))
-    delay = int(producer_config.get("delay", 5))
-    start_batch = int(producer_config.get("start_batch", 1))
 
-    logger.info(
-    {
-        "event": "rawdata_producer_configuration",
-        "batch_size": batch_size,
-        "max_batches": max_batches,
-        "delay": delay,
-        "start_batch": start_batch
-    }
-)
     # -----------------------------------------
     # Etape 1 - Simulation d'arrivé de données brutes
     # Génère des fichiers csv dans dossier raw
@@ -164,19 +137,15 @@ with DAG(
         task_id="generate_raw_batches",
         image=SETTINGS["docker"]["data-integration_image"],
         command=(
-            "python /app/weather_raw_producer_entrypoint.py "
-            f"--batch-size {batch_size} "
-            f"--max-batches {max_batches} "
-            f"--delay {delay} "
-            f"--start-batch {start_batch}"
+            "{% set c = var.json.get('WEATHER_RAW_PRODUCER_CONFIG', {}) %}"
+            "python /app/weather_raw_producer_entrypoint.py"
+            " --batch-size {{ c.get('batch_size', 500) }}"
+            " --max-batches {{ c.get('max_batches', 5) }}"
+            " --delay {{ c.get('delay', 5) }}"
+            "{% if c.get('start_batch') %} --start-batch {{ c.get('start_batch') }}{% endif %}"
         ),
-        pool="weather_pool",
+        pool="producer_pool",
         environment={
-            "POSTGRES_WTH_HOST": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).host }}",
-            "POSTGRES_WTH_PORT": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).port }}",
-            "POSTGRES_WTH_DB": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).schema }}",
-            "POSTGRES_WTH_USER": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).login }}",
-            "POSTGRES_WTH_PASSWORD": "{{ conn.get(var.value.WEATHER_POSTGRES_CONN_ID).password }}",
             "AIRFLOW_CONTAINER_DATA_DIR": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
             "AIRFLOW_CONTAINER_LOGS_DIR": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
             "WEATHER_HOST_DATA_DIR": os.environ["WEATHER_HOST_DATA_DIR"],

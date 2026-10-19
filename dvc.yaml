@@ -75,9 +75,8 @@ stages:
     params:
       - params.yml:
           - evaluation
-          - mlflow
     outs:
       - data/predictions.csv
     metrics:
-      - metrics/scores.json:
+      - metrics/candidate_scores.json:
           cache: false

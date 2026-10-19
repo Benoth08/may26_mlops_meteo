@@ -12,11 +12,10 @@ fois au startup (cf. api/main.py).
 import joblib
 import time
 
-from pathlib import Path
 from threading import Lock
 
 from fastapi import Request
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from core.logger import get_logger
 from constants import MODEL_PATH, TABLE_RAW, IMPORT_DATE_COLUMN
@@ -25,6 +24,13 @@ logger = get_logger("api")
 
 
 # ── Modèle ───────────────────────────────────────────────────────────────
+class ModelUnavailableError(FileNotFoundError):
+    """
+    Aucun modèle n'est disponible sur le disque (pas encore entraîné ou
+    promu). Convertie en réponse HTTP 503 par le handler de main.py.
+    """
+
+
 class ModelManager:
     """
     Gestion thread-safe du modèle.
@@ -58,7 +64,7 @@ class ModelManager:
         Charge le modèle depuis le disque.
         """
         if not MODEL_PATH.exists():
-            raise FileNotFoundError(
+            raise ModelUnavailableError(
                 f"Modèle absent : {MODEL_PATH}"
             )
 
@@ -98,15 +104,6 @@ class ModelManager:
 
         Recharge automatiquement si le fichier a changé.
         """
-        
-        logger.info({
-            "event": "check_model",
-            "model_path": str(MODEL_PATH),
-            "exists": MODEL_PATH.exists(),
-            "version": self.version,
-            "current_version": self._get_version()
-        })
-
         current_version = self._get_version()
 
         # Le fichier modèle n'existe plus
@@ -116,7 +113,7 @@ class ModelManager:
                 self.metadata = None
                 self.version = None
 
-            raise FileNotFoundError(
+            raise ModelUnavailableError(
                 f"Modèle absent : {MODEL_PATH}"
             )
 
@@ -138,7 +135,7 @@ class ModelManager:
                 self.metadata = None
                 self.version = None
 
-                raise FileNotFoundError(
+                raise ModelUnavailableError(
                     f"Modèle absent : {MODEL_PATH}"
                 )
 
@@ -225,15 +222,8 @@ def check_model():
     
 # ── Base de données ─────────────────────────────────────────────────────
 def get_engine(request: Request):
-    """Crée un engine Postgres à la demande à partir de la config chargée au startup."""
-    cfg = request.app.state.db_config
-    if not cfg:
-        return None
-    try:
-        return create_engine(cfg.sqlalchemy_uri)
-    except Exception as e:
-        logger.error({"event": "engine_creation_failed", "error": str(e)}, exc_info=True)
-        return None
+    """Engine Postgres partagé, créé une seule fois au startup (cf. main.py)."""
+    return getattr(request.app.state, "db_engine", None)
 
 
 def check_database(request: Request):

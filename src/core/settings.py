@@ -155,7 +155,16 @@ SQL_BATCH_SIZE = 500
 # ============================================================================
 # Dossiers du projet (vu interne docker)
 # ============================================================================
-DATA_DIR = Path("/data")
+_IN_DOCKER = Path("/.dockerenv").exists()
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _project_dir(env_name: str, docker_path: str, local_name: str) -> Path:
+    """Chemin absolu en conteneur, relatif au dépôt en local (DVC, tests, Streamlit)."""
+    default = Path(docker_path) if _IN_DOCKER else _REPO_ROOT / local_name
+    return Path(os.getenv(env_name, str(default)))
+
+DATA_DIR = _project_dir("WEATHER_DATA_DIR", "/data", "data")
+
 DATA_INCOMING_FLD = "incoming"
 DATA_RAW_FLD = "raw"
 DATA_PROCESSED_FLD = "processed"
@@ -167,24 +176,22 @@ RAW_DIR = DATA_DIR / DATA_RAW_FLD
 PROCESSED_DIR = DATA_DIR / DATA_PROCESSED_FLD
 ARCHIVE_DIR = DATA_DIR / DATA_ARCHIVE_FLD
 
-MODELS_DIR = Path("/models")
-REPORTS_DIR = Path("reports")
+MODELS_DIR = _project_dir("WEATHER_MODELS_DIR", "/models", "models")
+REPORTS_DIR = _project_dir("WEATHER_REPORTS_DIR", "/reports", "reports")
 FIGURES_DIR = REPORTS_DIR / "figures"
-METRICS_DIR = Path("/metrics")
-_DEFAULT_LOGS_DIR = (
-    Path("/logs")
-    if Path("/.dockerenv").exists()
-    else Path(__file__).resolve().parents[2] / "logs"
-)
-LOGS_DIR = Path(os.getenv("WEATHER_LOGS_DIR", str(_DEFAULT_LOGS_DIR)))
+METRICS_DIR = _project_dir("WEATHER_METRICS_DIR", "/metrics", "metrics")
+LOGS_DIR = _project_dir("WEATHER_LOGS_DIR", "/logs", "logs")
 
 # ============================================================================
 # Artefacts Modele
 # ============================================================================
 MODEL_NAME = "model.joblib"
 CANDIDATE_MODEL_NAME = "candidate_model.joblib"
+CANDIDATE_METRICS_NAME = "candidate_scores.json"
+CANDIDATE_INFO_NAME = "candidate_info.json"
 MODEL_PKL_NAME = "model.pkl"
-REGISTERED_MODEL_NAME = "weather-rain-model"
+REGISTERED_MODEL_NAME = "weatheraus-rain-model"
+MLFLOW_EXPERIMENT_NAME = "weatheraus-training"
 RAW_DATA = "weatherAUS.csv"
 RAW_DATASET = "weather.parquet"
 PREPROCESSED_DATA = "weather_data_clean.csv"
@@ -277,23 +284,21 @@ SETTINGS = {
     },
     
     "docker": {
-        "host_data_dir": os.environ["WEATHER_HOST_DATA_DIR"], # vu par le daemon Docker hôte
-        "host_logs_dir": os.environ["WEATHER_HOST_LOGS_DIR"],
-        "host_models_dir": os.environ["WEATHER_HOST_MODELS_DIR"],
-        "host_metrics_dir": os.environ["WEATHER_HOST_METRICS_DIR"],
-        # Déduit du dossier models s'il n'est pas déclaré : les deux sont
-        # côte à côte à la racine du dépôt. Évite de casser un .env existant.
+        "host_data_dir": os.environ.get("WEATHER_HOST_DATA_DIR", ""),
+        "host_logs_dir": os.environ.get("WEATHER_HOST_LOGS_DIR", ""),
+        "host_models_dir": os.environ.get("WEATHER_HOST_MODELS_DIR", ""),
+        "host_metrics_dir": os.environ.get("WEATHER_HOST_METRICS_DIR", ""),
         "host_reports_dir": os.environ.get(
             "WEATHER_HOST_REPORTS_DIR",
-            str(Path(os.environ["WEATHER_HOST_MODELS_DIR"]).parent / "reports"),
+            str(Path(os.environ.get("WEATHER_HOST_MODELS_DIR", "/")).parent / "reports"),
         ),
         "container_data_target": "/data", # cible dans le conteneur d'intégration, peut rester en dur
         "container_logs_target": "/logs",
         "container_models_target": "/models",
         "container_metrics_target": "/metrics",
         "container_reports_target": "/reports",
-        "airflow_data_dir": os.environ["AIRFLOW_CONTAINER_DATA_DIR"],
-        "airflow_logs_dir": os.environ["AIRFLOW_CONTAINER_LOGS_DIR"],
+        "airflow_data_dir": os.environ.get("AIRFLOW_CONTAINER_DATA_DIR", ""),
+        "airflow_logs_dir": os.environ.get("AIRFLOW_CONTAINER_LOGS_DIR", ""),
         "folder_data_incoming": DATA_INCOMING_FLD,
         "folder_data_raw": DATA_RAW_FLD,
         "folder_data_processed": DATA_PROCESSED_FLD,
@@ -311,6 +316,7 @@ SETTINGS = {
         "candidate_model": CANDIDATE_MODEL_NAME,
         "model_pkl": MODEL_PKL_NAME,
         "registered_model_name": REGISTERED_MODEL_NAME,
+        "mlflow_experiment_name": MLFLOW_EXPERIMENT_NAME,
         "rawdata": RAW_DATA,
         "raw_dataset" : RAW_DATASET,
         "preprocessed_data": PREPROCESSED_DATA,
@@ -319,6 +325,8 @@ SETTINGS = {
         "best_params": BEST_PARAMS_NAME,
         "reports": REPORTS_NAME,
         "metrics": METRICS_NAME,
+        "candidate_metrics": CANDIDATE_METRICS_NAME,
+        "candidate_info": CANDIDATE_INFO_NAME,
         "predictions": PREDICTIONS_NAME
     },
     

@@ -23,7 +23,6 @@ PREPROCESSED_DATA_PATH = (DATA_DIR / SETTINGS["models"]["preprocessed_data"])
 
 # ── Palette & style global ───────────────────────────────────────────────────
 sns.set_theme(style="whitegrid", palette="muted", font_scale=1.1)
-FIGURES_DIR = Path("FIGURES_DIR")
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Noms lisibles des mois en français
@@ -194,5 +193,5 @@ if __name__ == "__main__":
     logger.info({"event": "visualize / Calendrier heatmap : OK"})
     print("✓ Calendrier heatmap")
 
-    logger.info({"event": "visualize / Figures sauvegardées → {FIGURES_DIR.resolve()}"})
+    logger.info({"event": "visualize_figures_saved", "path": str(FIGURES_DIR.resolve())})
     print(f"\nFigures sauvegardées → {FIGURES_DIR.resolve()}")

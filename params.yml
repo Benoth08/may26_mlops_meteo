@@ -21,7 +21,7 @@ postgres:
   table: weather_data_raw
 
 api:
-  url: http://localhost:8057/meteo
+  url: http://localhost:8057/
 
 # ============================================================================
 # Prétraitement
@@ -52,9 +52,4 @@ training:
   max_interval_hours: 24
   min_score_improvement: 0.01
 
-# ============================================================================
-# MLflow
-# ============================================================================
-mlflow:
-  experiment_name: WeatherAUS
-  model_name: rain_prediction
+  

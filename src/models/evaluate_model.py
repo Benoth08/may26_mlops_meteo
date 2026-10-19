@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import hashlib
 import joblib
 import pandas as pd
 
@@ -56,10 +57,19 @@ METRICS_DIR = Path(SETTINGS["paths"]["metrics"])
 PROCESSED_DIR = Path(SETTINGS["paths"]["processed"])
 DATA_DIR = Path(SETTINGS["paths"]["data"])
 
-DATASET_PATH = (PROCESSED_DIR / SETTINGS["models"]["dataset"])
+DATASET_PATH = Path(os.getenv("WEATHER_DATASET_PATH", str(PROCESSED_DIR / SETTINGS["models"]["dataset"])))
+
+# Snapshot brut exporté de Postgres (export_dataset.py), journalisé dans MLflow
+# avec le modèle pour savoir sur quelles données il a été entraîné.
+RAW_DATASET_PATH = Path(os.getenv(
+    "WEATHER_RAW_DATASET_PATH",
+    str(DATA_DIR / SETTINGS["models"]["raw_dataset"]),
+))
+
 # Modèle candidat produit par train_model.py, pas encore promu.
 MODEL_PATH = (MODELS_DIR / SETTINGS["models"]["candidate_model"])
-METRICS_PATH = (METRICS_DIR / SETTINGS["models"]["metrics"])
+METRICS_PATH = (METRICS_DIR / SETTINGS["models"]["candidate_metrics"])
+CANDIDATE_INFO_PATH = (MODELS_DIR / SETTINGS["models"]["candidate_info"])
 PREDICTIONS_PATH = (DATA_DIR.parent / SETTINGS["models"]["predictions"])
 BEST_PARAMS_PATH = (MODELS_DIR / SETTINGS["models"]["best_params"])
 
@@ -76,7 +86,7 @@ SKIP_EXIT_CODE = 99
 PARAMS = load_params()
 
 THRESHOLD = float(PARAMS["evaluation"]["threshold"])
-MLFLOW_EXPERIMENT_NAME = PARAMS["mlflow"]["experiment_name"]
+MLFLOW_EXPERIMENT_NAME = SETTINGS["models"]["mlflow_experiment_name"]
 
 
 # =============================================================================
@@ -305,6 +315,9 @@ def evaluate(y_test, y_pred, y_proba):
     # -------------------------------------------------------------------------
     # Métriques
     # -------------------------------------------------------------------------
+    # Sur un petit jeu de test, une seule classe peut être présente :
+    # roc_auc_score lève alors une erreur. On renvoie NaN plutôt que d'échouer.
+    both_classes = len(set(y_test)) == 2
     scores = {
         "accuracy": float(
             accuracy_score(y_test, y_pred)
@@ -316,18 +329,8 @@ def evaluate(y_test, y_pred, y_proba):
                 zero_division=0,
             )
         ),
-        "roc_auc": float(
-            roc_auc_score(
-                y_test,
-                y_proba,
-            )
-        ),
-        "pr_auc": float(
-            average_precision_score(
-                y_test,
-                y_proba,
-            )
-        ),
+        "roc_auc": float(roc_auc_score(y_test, y_proba)) if both_classes else float("nan"),
+        "pr_auc": float(average_precision_score(y_test, y_proba)) if both_classes else float("nan"),
         "precision_pluie": float(
             precision_score(
                 y_test,
@@ -392,6 +395,46 @@ def save_predictions(y_pred, y_proba):
     )
 
 
+def log_dataset_to_mlflow(mlflow) -> None:
+    """
+    Rattache le dataset au run MLflow courant :
+      - le fichier parquet en artefact (stocké sur DagsHub),
+      - un dataset MLflow (schéma, empreinte) visible dans l'onglet "Datasets",
+      - l'empreinte md5, identique à celle de dvc.lock, pour faire le lien avec DVC.
+    """
+    if not RAW_DATASET_PATH.exists():
+        logger.warning({"event": "raw_dataset_missing", "path": str(RAW_DATASET_PATH)})
+        return
+
+    md5 = hashlib.md5(RAW_DATASET_PATH.read_bytes()).hexdigest()
+    mlflow.set_tag("dataset_md5", md5)
+    mlflow.set_tag("dataset_path", str(RAW_DATASET_PATH))
+
+    try:
+        mlflow.log_artifact(str(RAW_DATASET_PATH), artifact_path="dataset")
+    except Exception as exc:
+        logger.error({"event": "mlflow_dataset_artifact_failed", "error": str(exc)}, exc_info=True)
+        return
+
+    try:
+        import mlflow.data
+
+        df_raw = pd.read_parquet(RAW_DATASET_PATH)
+        dataset = mlflow.data.from_pandas(
+            df_raw,
+            source=str(RAW_DATASET_PATH),
+            name="weather_raw",
+            targets=SETTINGS["target"]["column_norm"],
+        )
+        mlflow.log_input(dataset, context="training")
+    except Exception as exc:
+        # L'artefact est déjà envoyé : un serveur qui ne gère pas log_input
+        # ne doit pas faire échouer l'évaluation.
+        logger.warning({"event": "mlflow_log_input_failed", "error": str(exc)})
+
+    logger.info({"event": "dataset_logged_mlflow", "md5": md5, "rows_file": str(RAW_DATASET_PATH)})
+
+
 def log_mlflow(model, scores, best_params):
     """
     Enregistre le résultat de l'évaluation dans MLflow.
@@ -417,7 +460,7 @@ def log_mlflow(model, scores, best_params):
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
 
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
             # ---------------------------------------------------------------
             # Paramètres
             # ---------------------------------------------------------------
@@ -448,6 +491,22 @@ def log_mlflow(model, scores, best_params):
                 registered_model_name=REGISTERED_MODEL_NAME,
             )
 
+            # ---------------------------------------------------------------
+            # Données d'entraînement
+            # ---------------------------------------------------------------
+            log_dataset_to_mlflow(mlflow)
+
+
+        # promote_model.py promeut CETTE version, pas "la plus récente du
+        # registre" (qui peut être une autre si ce logging a échoué).
+        CANDIDATE_INFO_PATH.write_text(
+            json.dumps({
+                "run_id": run.info.run_id,
+                "version": str(model_info.registered_model_version),
+            }),
+            encoding="utf-8",
+        )
+
         logger.info(
             {
                 "event": "mlflow_logged",
@@ -461,15 +520,18 @@ def log_mlflow(model, scores, best_params):
         )
 
     except Exception as exc:
-        # MLflow ne doit pas faire échouer l'évaluation si le calcul
-        # des métriques s'est correctement terminé.
-        logger.warning(
+        # Sans enregistrement MLflow, la promotion n'est pas possible :
+        # on échoue franchement plutôt que de laisser promote_model
+        # comparer une ancienne version.
+        logger.error(
             {
                 "event": "mlflow_logging_failed",
                 "error": str(exc),
             },
             exc_info=True,
         )
+
+        raise
 
 
 def display_results(scores):
@@ -507,6 +569,8 @@ def main():
     )
 
     try:
+        CANDIDATE_INFO_PATH.unlink(missing_ok=True)
+
         # ---------------------------------------------------------------------
         # 1. Chargement
         # ---------------------------------------------------------------------

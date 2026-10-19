@@ -1,6 +1,7 @@
 """Dashboard Weather MLOps — Vue d'ensemble + Prétraitement + EDA + Prédiction."""
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 
+import sys
 import json
 from pathlib import Path
 
@@ -14,7 +15,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src.features import build_features as bf
+_ROOT = Path(__file__).resolve().parent
+# Mêmes imports "plats" que dans les images Docker (core, build_features).
+sys.path[:0] = [str(_ROOT / "src"), str(_ROOT / "src" / "features")]
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+
+import build_features as bf
 
 DATA_PATH = "data/raw/weatherAUS.csv"
 MODEL_PATH = "models/model.joblib" if Path("models/model.joblib").exists() else "models/model.pkl"

@@ -1,4 +1,4 @@
-﻿FROM python:3.12-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -9,12 +9,11 @@ WORKDIR /app
 
 # build-essential et libgomp1 : necessaires a LightGBM. curl : pour le healthcheck.
 RUN apt-get update && apt-get install -y \
-    build-essential \
     curl \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# DÃ©pendances
+# Dépendances
 COPY src/dockerfiles/common/requirements-ml.txt .
 COPY src/dockerfiles/api_weather/requirements.txt .
 
@@ -22,7 +21,7 @@ RUN pip install --no-cache-dir \
     -r requirements-ml.txt \
     -r requirements.txt
 
-# Code mÃ©tier (Entrypoint : src/api_weather/main.py
+# Code métier (Entrypoint : src/api_weather/main.py
 COPY params.yml /app/params.yml
 COPY src/core/ /app/core/
 COPY src/api_weather/ /app/

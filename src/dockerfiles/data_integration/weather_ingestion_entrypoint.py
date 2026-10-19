@@ -59,14 +59,14 @@ def resolve_csv_path(filename: str) -> Path:
         weather_batch_001.csv
         weather_batch_001.csv.processing
 
-    Dans le second cas, le suffixe .processing est retiré avant
-    l'intégration.
+    Le fichier .processing est lu directement ; WeatherDataLoader retire le
+    suffixe au moment de l'archivage.
     
     Exemple :
-        --file weather_batch_001.csv
+        --file weather_batch_001.csv.processing
 
     devient :
-        /data/weather_batch_001.csv
+        /data/weather_batch_001.csv.processing
     """                                       
 
     # Répertoire DATA dans le conteneur
@@ -115,40 +115,7 @@ def resolve_csv_path(filename: str) -> Path:
             f"Le chemin indiqué n'est pas un fichier : {source_path}"
         )
 
-    # Si .processing : renommer en .csv
-    if is_processing:
-        csv_filename = filename[:-len(".processing")]
-        csv_path = (dataraw_dir / csv_filename).resolve()
-
-        logger.info({
-            "event": "processing_file_detected",
-            "source": str(source_path),
-            "target": str(csv_path),
-        })
-
-        # Éviter d'écraser un fichier CSV existant
-        if csv_path.exists():
-            raise FileExistsError(
-                "Le fichier CSV cible existe déjà : "
-                f"{csv_path}"
-            )
-
-        source_path.rename(csv_path)
-
-        logger.info({
-            "event": "processing_file_renamed",
-            "source": str(source_path),
-            "target": str(csv_path),
-        })
-
-    else:
-        csv_path = source_path
-
-    # Vérification finale
-    if not csv_path.exists():
-        raise FileNotFoundError(
-            f"Fichier CSV introuvable après résolution : {csv_path}"
-        )
+    csv_path = source_path
 
     logger.info({
         "event": "csv_path_resolved",
@@ -184,46 +151,7 @@ def main():
         sys.exit(1)
 
     # -------------------------------------------------------------------------
-    # 2. Vérification de l'existence du fichier
-    # -------------------------------------------------------------------------
-    if not csv_path.exists():
-        error = (
-            f"Fichier CSV introuvable dans le conteneur : "
-            f"{csv_path}"
-        )
-
-        logger.error({
-            "event": "csv_not_found",
-            "csv_path": str(csv_path),
-        })
-
-        print(json.dumps({
-            "status": "failed",
-            "error": error,
-        }))
-
-        sys.exit(1)
-
-    if not csv_path.is_file():
-        error = (
-            f"Le chemin indiqué n'est pas un fichier : "
-            f"{csv_path}"
-        )
-
-        logger.error({
-            "event": "csv_not_file",
-            "csv_path": str(csv_path),
-        })
-
-        print(json.dumps({
-            "status": "failed",
-            "error": error,
-        }))
-
-        sys.exit(1)
-
-    # -------------------------------------------------------------------------
-    # 3. Charger la configuration PostgreSQL
+    # 2. Charger la configuration PostgreSQL
     # -------------------------------------------------------------------------
     try:
         cfg = load_postgres_config()
@@ -241,7 +169,7 @@ def main():
         sys.exit(1)
 
     # -------------------------------------------------------------------------
-    # 4. Lancer l'intégration
+    # 3. Lancer l'intégration
     # -------------------------------------------------------------------------
     try:
         start = time.time()
@@ -259,7 +187,7 @@ def main():
         duration = time.time() - start
 
         # ---------------------------------------------------------------------
-        # 5. Vérifier le résultat
+        # 4. Vérifier le résultat
         # ---------------------------------------------------------------------                                              
         if not isinstance(result, dict):
             raise Exception(
@@ -274,7 +202,7 @@ def main():
         status = result["status"]
 
         # ---------------------------------------------------------------------
-        # 6. Import échoué
+        # 5. Import échoué
         # ---------------------------------------------------------------------
         if status == "failed":
             if "error" not in result:
@@ -287,7 +215,7 @@ def main():
             )
 
         # ---------------------------------------------------------------------
-        # 7. Import réussi
+        # 6. Import réussi
         # ---------------------------------------------------------------------
         if status == "success":    
             if "rows_imported" not in result:
@@ -318,7 +246,7 @@ def main():
             return result
 
         # ---------------------------------------------------------------------
-        # 8. Status inconnu
+        # 7. Status inconnu
         # ---------------------------------------------------------------------
 
         raise Exception(

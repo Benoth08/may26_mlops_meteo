@@ -33,13 +33,15 @@
 """
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from sqlalchemy import create_engine
 
 from core.logger import get_logger
-from core.config import ConfigError, PostgresConfig, load_postgres_config
+from core.config import ConfigError, load_postgres_config
 from constants import MODEL_PATH, API_VERSION, THREADS_SETTINGS
-from deps import model_manager
+from deps import model_manager, ModelUnavailableError
 
 # Doit être posé AVANT l'import de numpy/sklearn
 for _env_key, _env_val in THREADS_SETTINGS.items():
@@ -72,6 +74,16 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"Configuration PostgreSQL invalide : {e}"
         )
+
+    # Un seul engine (et donc un seul pool de connexions) pour toute l'app.
+    app.state.db_engine = create_engine(
+        app.state.db_config.sqlalchemy_uri,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=3,
+        # SQL_ECHO=1 : SQLAlchemy logue chaque requête exécutée et ses paramètres
+        echo=os.environ.get("SQL_ECHO") == "1",
+    )
 
     # Authentification API
     expected_username = os.environ.get("API_AUTH_USERNAME", "")
@@ -136,6 +148,7 @@ async def lifespan(app: FastAPI):
     # ============================================================
     # SHUTDOWN
     # ============================================================
+    app.state.db_engine.dispose()
     logger.info({
         "event": "api_shutdown"
     })
@@ -156,7 +169,26 @@ app = FastAPI(
 # même avant que le startup ait tourné (ex: tests qui montent l'app sans TestClient
 # lifespan). Remplis pour de bon dans startup_event().
 app.state.db_config = {}
+app.state.db_engine = None
 app.state.api_credentials = {}
+
+@app.exception_handler(ModelUnavailableError)
+def model_unavailable_handler(request: Request, exc: ModelUnavailableError):
+    """Modèle absent : 503 explicite plutôt qu'un 500 générique."""
+    logger.warning({
+        "event": "model_unavailable",
+        "path": request.url.path,
+        "error": str(exc),
+    })
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "Aucun modèle n'est disponible pour le moment : le modèle "
+                "n'a pas encore été entraîné ou promu. Réessayez plus tard."
+            )
+        },
+    )
 
 app.include_router(meta.router)
 app.include_router(weather.router)

@@ -26,6 +26,10 @@ fi
 export PYTHONIOENCODING=utf-8
 export PATH="$(pwd)/$VENV_BIN:$PATH"
 
+# Les modules importent `core`, `build_features` et `training_state` en
+# imports "plats" (comme dans les images Docker).
+export PYTHONPATH="$(pwd)/src:$(pwd)/src/features:$(pwd)/src/models${PYTHONPATH:+:$PYTHONPATH}"
+
 # Charge .env si present (MLFLOW_TRACKING_URI/USERNAME/PASSWORD, voir
 # scripts/mlflow/configure.sh) pour que evaluate_model.py logue aussi dans
 # MLflow. Sans .env, la pipeline tourne normalement, juste sans tracking.

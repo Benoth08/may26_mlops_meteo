@@ -52,7 +52,7 @@ from core.config import load_postgres_config
 from core.logger import get_logger
 from core.settings import SETTINGS
 from core.params import load_params
-from core.metadata import COLUMN_CONSTRAINTS, REQUIRED_COLUMNS, TECHNICAL_COLUMNS, NON_TECHNICAL_COLUMNS, FEATURE_COLUMNS, WIND_DIRECTION_COLUMNS, NUMERIC_COLUMNS, CATEGORICAL_COLUMNS, get_all_columns, normalize_column_name, normalize_data
+from core.metadata import COLUMN_CONSTRAINTS, REQUIRED_COLUMNS, TECHNICAL_COLUMNS, FEATURE_COLUMNS, WIND_DIRECTION_COLUMNS, normalize_column_name, normalize_data
 from export_dataset import extract_dataset as load_dataset
 
 
@@ -281,14 +281,16 @@ def save_clean_data_to_csv(
     """
     PREPROCESSED_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    file_exists = PREPROCESSED_DATA_PATH.exists()
-    df.to_csv(PREPROCESSED_DATA_PATH, mode="a", header=not file_exists, index=False)
+    # Le dataset est ré-extrait en entier à chaque run (cf. export_dataset) :
+    # on remplace le fichier (écriture atomique) au lieu d'y ajouter des doublons.
+    tmp_path = PREPROCESSED_DATA_PATH.with_name(PREPROCESSED_DATA_PATH.name + ".tmp")
+    df.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, PREPROCESSED_DATA_PATH)
 
     logger.info({
         "event": "clean_data_saved_csv",
         "path": str(PREPROCESSED_DATA_PATH),
-        "rows": len(df),
-        "mode": "append" if file_exists else "create",
+        "rows": len(df)
     })
 
     return PREPROCESSED_DATA_PATH
@@ -328,8 +330,7 @@ def save_prepared_data(
     elif source == "postgres":
         logger.info({
             "event": "saving_clean_data_postgres",
-            "table_name": table_name,
-            "connection": connection_uri
+            "table_name": table_name
         })   
         
         required_params = {
@@ -551,10 +552,6 @@ def encode_rain_today(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 # Traitement de la date
 # ============================================================
-
-import re
-import pandas as pd
-
 
 def parse_date_column(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -1167,7 +1164,6 @@ def prepare_data(
         "event": "init_data_preprocessing",
         "source": source,
         "data_path": data_path,
-        "connection_uri": connection_uri,
         "table_name": table_name,
         "api_url": api_url
     })
@@ -1471,34 +1467,6 @@ def parse_arguments() -> argparse.Namespace:
         "--no-save-report",
         action="store_true",
         help="Désactive la sauvegarde du rapport des valeurs manquantes.",
-    )
-
-    parser.add_argument(
-        "--save-clean-to-postgres",
-        action="store_true",
-        help=(
-            "Insère les données nettoyées / typées (avant feature engineering ML) "
-            "dans la table Postgres clean, juste après convert_types."
-        ),
-    )
-    
-    parser.add_argument(
-        "--run-id",
-        type=str,
-        default=None,
-        help="Identifiant de run stocké dans la colonne technique run_id (généré si absent).",
-    )
-    parser.add_argument(
-        "--clean-connection-uri",
-        type=str,
-        default=None,
-        help="URI SQLAlchemy pour l'écriture vers la table clean (défaut : config.load_postgres_config).",
-    )
-    parser.add_argument(
-        "--clean-table-name",
-        type=str,
-        default=SETTINGS["postgres"]["table_clean"],
-        help="Table Postgres cible pour l'insertion des données nettoyées.",
     )
 
     return parser.parse_args()

@@ -34,17 +34,16 @@ def build_weather_model(schema: dict):
         # Type de champ
         py_type = TYPE_MAPPING[metadata["type"]]
 
-        # Champ obligatoire
-        if metadata.get("required", False):
-            fields[norm_name] = (py_type, ...)
-        # Champ optionnel
-        else:
+        # Non nullable (date, location) : obligatoire et typé strictement.
+        # Nullable : la clé peut être absente ou null, l'imputer du pipeline
+        # gère la valeur manquante (ex : sunshine souvent non mesuré).
+        if metadata.get("nullable", True):
             fields[norm_name] = (Optional[py_type], None)
+        else:
+            fields[norm_name] = (py_type, ...)
 
     return create_model("WeatherInput", __base__=BaseModel, **fields)
 
 
 # Schéma d'entrée pour /predict
 WeatherInput = build_weather_model(FEATURE_CONSTRAINTS)
-
-print(WeatherInput.model_fields.keys())

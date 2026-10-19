@@ -7,7 +7,6 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,6 +20,7 @@ RUN pip install --no-cache-dir \
     -r requirements.txt
 
 # Code métier
+COPY params.yml /app/monitoring/params.yml
 COPY src/core/ /app/monitoring/core/
 COPY src/features/ /app/monitoring/
 COPY src/monitoring /app/monitoring/

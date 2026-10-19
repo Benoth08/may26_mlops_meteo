@@ -21,7 +21,6 @@ import time
 import argparse
 
 from core.logger import get_logger
-from core.settings import SETTINGS
 
 from weather_rawdata_producer import WeatherRawDataProducer
 
@@ -58,8 +57,8 @@ def main():
     parser.add_argument(
         "--start-batch",
         type=int,
-        default=1,
-        help="Premier batch à générer"
+        default=None,
+        help="Premier batch à générer (défaut : reprendre le batch suivant celui généré lors du dernier run)"
     )
 
     args = parser.parse_args()
@@ -78,7 +77,7 @@ def main():
         
         producer = WeatherRawDataProducer()
         
-        producer.run(
+        result_run = producer.run(
             batch_size=args.batch_size,
             start_batch=args.start_batch,
             max_batches=args.max_batches,
@@ -94,7 +93,7 @@ def main():
             "status": "success",
             "duration_seconds": duration,
             "batch_size": args.batch_size,
-            "generated_batches": args.max_batches
+            "generated_batches": result_run["generated_batches"]
         }
 
         logger.info(

@@ -21,6 +21,7 @@
 ===============================================================================
 """
 
+import json
 import os
 import sys
 
@@ -40,6 +41,7 @@ from core.metadata import NON_TECHNICAL_COLUMNS
 logger = get_logger("export_dataset")
 
 OUTPUT_PATH = (Path(SETTINGS["paths"]["data"])/ SETTINGS["models"]["raw_dataset"])
+MARKER_PATH = OUTPUT_PATH.with_name(OUTPUT_PATH.name + ".marker.json")
 
 # Code de sortie signalant à Airflow (DockerOperator.skip_on_exit_code) qu'il
 # n'y a aucune donnée à traiter : la tâche et les tâches en aval doivent être
@@ -273,6 +275,19 @@ def load_data_from_api(api_url: str) -> pd.DataFrame:
     return df
 
 
+def get_last_import(connection_uri: str, table_name: str) -> Optional[str]:
+    """Date du dernier import, pour éviter de ré-exporter un dataset inchangé."""
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(connection_uri)
+    try:
+        with engine.connect() as conn:
+            value = conn.execute(text(f"SELECT MAX({IMPORT_DATE_COL}) FROM {table_name}")).scalar()
+    finally:
+        engine.dispose()
+    return value.isoformat() if value is not None else None
+
+
 def extract_dataset(
     source: str = "csv",
     data_path: Optional[str] = None,
@@ -385,7 +400,16 @@ def main():
             "source": SOURCE
         }
     )
-    
+
+    last_import = None
+    if SOURCE == "postgres":
+        last_import = get_last_import(connection_uri, POSTGRES_TABLE)
+        if OUTPUT_PATH.exists() and MARKER_PATH.exists():
+            previous = json.loads(MARKER_PATH.read_text(encoding="utf-8")).get("last_import")
+            if previous == last_import:
+                print("⚠️  export_dataset SKIPPED (aucun nouvel import)")
+                sys.exit(SKIP_EXIT_CODE)
+
     df = extract_dataset(
         source=SOURCE,
         data_path=CSV_PATH,
@@ -407,6 +431,7 @@ def main():
         sys.exit(SKIP_EXIT_CODE)
 
     save_parquet(df, OUTPUT_PATH)
+    MARKER_PATH.write_text(json.dumps({"last_import": last_import}), encoding="utf-8")
 
     logger.info(
         {

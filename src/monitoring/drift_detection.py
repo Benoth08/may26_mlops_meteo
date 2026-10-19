@@ -41,6 +41,10 @@ from core.settings import SETTINGS
 from core.config import load_postgres_config, ConfigError
 from core.logger import get_logger
 
+from core.params import load_params
+
+# Seuil de décision pluie / pas pluie, identique à l'évaluation et à l'API
+SEUIL_PLUIE = float(load_params()["evaluation"]["threshold"])
 
 logger = get_logger("drift_detection")
 
@@ -88,10 +92,19 @@ SEUIL_HAUSSE_MANQUANTS = float(os.environ.get("QUALITY_MISSING_INCREASE", "0.10"
 # Nombre minimal de lignes dans chaque fenêtre pour que la comparaison ait un sens
 MIN_LIGNES = 30
 
+# Code de sortie interprété par Airflow (skip_on_exit_code) : pas assez de
+# données pour conclure, ce n'est pas une panne.
+SKIP_EXIT_CODE = 99
+IMPORT_DATE = SETTINGS["postgres"]["importdate_column_norm"]
+
+
 def lire_fenetre(engine, date_debut, date_fin):
     requete = (
-        'SELECT * FROM {} WHERE "date" > \'{}\' AND "date" <= \'{}\''.format(
-            TABLE_RAW, date_debut.date(), date_fin.date())
+        'SELECT DISTINCT ON ("date", location) * FROM {} '
+        'WHERE "date" > \'{}\' AND "date" <= \'{}\' '
+        'ORDER BY "date", location, {} DESC'
+    ).format(
+        TABLE_RAW, date_debut.date(), date_fin.date(), IMPORT_DATE
     )
     return pd.read_sql(requete, engine)
 
@@ -187,8 +200,8 @@ def derive_prediction(courant_brut, reference_brut):
         "derive": distance >= SEUIL_COLONNE,
         "proba_moyenne_courant": float(pc.mean()),
         "proba_moyenne_reference": float(pr.mean()),
-        "taux_pluie_courant": float((pc >= 0.5).mean()),
-        "taux_pluie_reference": float((pr >= 0.5).mean()),
+        "taux_pluie_courant": float((pc >= SEUIL_PLUIE).mean()),
+        "taux_pluie_reference": float((pr >= SEUIL_PLUIE).mean()),
     }
 
 
@@ -209,7 +222,7 @@ def main():
     if date_max is None:
         logger.error({"event": "table_vide", "table": TABLE_RAW})
         print("Table vide, aucune analyse possible")
-        sys.exit(1)
+        sys.exit(SKIP_EXIT_CODE)
 
     date_max = pd.Timestamp(date_max)
 
@@ -240,12 +253,17 @@ def main():
             "minimum": MIN_LIGNES,
         })
         print("Historique insuffisant pour comparer, analyse annulee")
-        sys.exit(1)
+        sys.exit(SKIP_EXIT_CODE)
 
     # On garde une copie brute : le modele a besoin de toutes les colonnes
     # d'origine pour rejouer la preparation, y compris la date.
     courant_brut = courant.copy()
     reference_brut = reference.copy()
+
+    # La table raw est entièrement en TEXT : sans conversion, Evidently traite
+    # les mesures comme des catégories et n'applique jamais Wasserstein.
+    courant = convert_types(courant)
+    reference = convert_types(reference)
 
     # Supression des colonnes techniques et la date
     colonnes = [c for c in courant.columns if c not in COLONNES_EXCLUES]

@@ -29,12 +29,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 
-import yaml
 
 from airflow import DAG
-from airflow.decorators import task
+from airflow.sdk import task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.standard.operators.trigger_dagrun import (
     TriggerDagRunOperator,
@@ -57,14 +55,7 @@ logger = logging.getLogger("airflow.task.weather_training_trigger")
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-
-
 PARAMS = load_params()
-
-POSTGRES_CONNECTION_ID = Variable.get(
-    "WEATHER_POSTGRES_CONN_ID",
-    default="weather_postgres",
-)
 
 DATA_TABLE = SETTINGS["postgres"]["table_raw"]
 
@@ -166,11 +157,7 @@ with DAG(
             )
         )
 
-        model_name = (
-            PARAMS
-            .get("mlflow", {})
-            .get("model_name", "rain_prediction")
-        )
+        model_name = SETTINGS["models"]["registered_model_name"]
 
         logger.info(
             {
@@ -184,9 +171,10 @@ with DAG(
         # ---------------------------------------------------------------------
         # PostgreSQL
         # ---------------------------------------------------------------------
+        conn_id = Variable.get("WEATHER_POSTGRES_CONN_ID", default="weather_postgres")
 
         postgres_hook = PostgresHook(
-            postgres_conn_id=POSTGRES_CONNECTION_ID
+            postgres_conn_id=conn_id
         )
 
         engine = postgres_hook.get_sqlalchemy_engine()
@@ -198,7 +186,6 @@ with DAG(
         # ---------------------------------------------------------------------
         # Nombre actuel de lignes
         # ---------------------------------------------------------------------
-
         current_row_count = (
             repository.get_current_row_count(
                 table_name=DATA_TABLE
@@ -326,6 +313,8 @@ with DAG(
             ),
         },
         wait_for_completion=True,
+        deferrable=True,
+        poke_interval=60,
         skip_when_already_exists=True,
         reset_dag_run=False,
     )
