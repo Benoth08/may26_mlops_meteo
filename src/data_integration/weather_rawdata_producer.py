@@ -26,6 +26,7 @@ import os
 import uuid
 import time
 import random
+import shutil
 
 import pandas as pd
 
@@ -71,8 +72,8 @@ class WeatherRawDataProducer:
         )
         self.data = None
 
-        # Prochain batch à produire, conservé entre deux runs du DAG
-        self.state_file = self.raw_directory / "producer_state.json"
+        # Répertoire d'archive du fichier source une fois entièrement traité
+        self.archive_directory = Path(SETTINGS["paths"]["archive"])
 
 
     # ======================================================
@@ -151,17 +152,42 @@ class WeatherRawDataProducer:
             f"{batch_number:05d}.csv"
         )
 
-    def _read_next_batch(self) -> int:
-        if self.state_file.exists():
-            try:
-                state = json.loads(self.state_file.read_text(encoding="utf-8"))
-                return int(state["next_batch"])
-            except (ValueError, KeyError, json.JSONDecodeError):
-                self.logger.warning({"event": "producer_state_invalid", "file": str(self.state_file)})
-        return 1
+    # ======================================================
+    # Archivage du fichier source
+    # ======================================================
+    def archive_source(self):
+        """
+        Archive le fichier source une fois entièrement découpé en lots.
+        """
+        try:
+            self.archive_directory.mkdir(parents=True, exist_ok=True)
 
-    def _write_next_batch(self, next_batch: int) -> None:
-        self.state_file.write_text(json.dumps({"next_batch": next_batch}), encoding="utf-8")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest_path = (
+                self.archive_directory
+                / f"{self.source_file.stem}_{timestamp}{self.source_file.suffix}"
+            )
+
+            shutil.move(self.source_file, dest_path)
+
+            self.logger.info({
+                "event": "source_archived",
+                "simulation_id": self.simulation_id,
+                "source": str(self.source_file),
+                "destination": str(dest_path)
+            })
+
+            return dest_path
+
+        except Exception as e:
+            # Les lots sont déjà écrits : on ne fait pas échouer le run,
+            # un retry Airflow les régénérerait en double.
+            self.logger.error({
+                "event": "source_archive_failed",
+                "simulation_id": self.simulation_id,
+                "error": str(e)
+            }, exc_info=True)
+            return None
 
 
     # ==========================================================
@@ -185,8 +211,9 @@ class WeatherRawDataProducer:
                 or self.default_batch_size
             )
 
+            # Chaque run repart du début du fichier source
             if start_batch is None:
-                start_batch = self._read_next_batch()
+                start_batch = 1
 
             delay = (
                 delay
@@ -208,7 +235,7 @@ class WeatherRawDataProducer:
             generated = 0
             generated_files = []
             current_batch = start_batch
-            last_batch = None
+            dataset_exhausted = False
 
             while True:
                 start_index = (current_batch - 1)*batch_size
@@ -233,7 +260,6 @@ class WeatherRawDataProducer:
 
                 generated_files.append(filename)
                 generated += 1
-                last_batch = current_batch
 
                 self.logger.info({
                     "event": "batch_created",
@@ -242,6 +268,11 @@ class WeatherRawDataProducer:
                     "rows": len(batch),
                     "file": str(output_file)
                 })
+
+                # Dernier lot du fichier source : inutile d'attendre le délai
+                if end_index >= len(self.data):
+                    dataset_exhausted = True
+                    break
 
                 if (
                     max_batches
@@ -266,9 +297,6 @@ class WeatherRawDataProducer:
 
                     time.sleep(random_delay * 60)
 
-            if last_batch is not None:
-                self._write_next_batch(last_batch + 1)
-
             # ==================================================
             # Création config uniquement si succès
             # ==================================================
@@ -279,12 +307,18 @@ class WeatherRawDataProducer:
                 delay=delay,
                 generated_files=generated_files
             )
-            
+
+            archive_path = None
+            if dataset_exhausted:
+                archive_path = self.archive_source()
+
+
             result = {
                 "event": "producer_finished",
                 "simulation_id": self.simulation_id,
                 "generated_batches": generated,
-                "files": generated_files
+                "files": generated_files,
+                "archive_path": str(archive_path) if archive_path else None
             }
             
             
