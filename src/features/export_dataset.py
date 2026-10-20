@@ -59,6 +59,7 @@ SKIP_EXIT_CODE = 99
 
 TARGET = SETTINGS["target"]["column_norm"]
 LOCATION = SETTINGS["location"]["column_norm"]
+DATE_COL = SETTINGS["constraints"]["Date"]["norm_name"]  # "date"
 
  
 # Valeurs considérées comme NA (CSV + Postgres)
@@ -163,14 +164,13 @@ def load_data_from_postgres(connection_uri: str, table_name: str) -> pd.DataFram
 
     columns = ", ".join(NON_TECHNICAL_COLUMNS)
 
+
+    # Dernière observation importée pour chaque couple (date, location)
     query = text(
         f"""
-        SELECT {columns}
+        SELECT DISTINCT ON ({DATE_COL}, {LOCATION}) {columns}
         FROM {table_name}
-        WHERE {IMPORT_DATE_COL} = (
-            SELECT MAX({IMPORT_DATE_COL})
-            FROM {table_name}
-        )
+        ORDER BY {DATE_COL}, {LOCATION}, {IMPORT_DATE_COL} DESC
         """
     )
 
